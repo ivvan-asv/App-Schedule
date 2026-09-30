@@ -3,7 +3,6 @@
 [![Status](https://img.shields.io/badge/status-active%20development-brightgreen)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI%20%7C%20Python-009688.svg?logo=fastapi)](https://fastapi.tiangolo.com)
-[![React Native](https://img.shields.io/badge/Mobile-React%20Native%20%7C%20Expo-61DAFB.svg?logo=react)](https://reactnative.dev)
 [![Next.js](https://img.shields.io/badge/Web-Next.js%2014-black.svg?logo=next.js)](https://nextjs.org)
 
 **Smart Scheduler AI** es un asistente contextual de última generación diseñado para eliminar por completo la fricción operativa en la gestión de tiempo personal y profesional. Transforma intenciones expresadas por voz o texto en bloques de tiempo optimizados, calculando automáticamente traslados en tiempo real y negociando reuniones con terceros de forma desatendida.
