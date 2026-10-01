@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ParsedEvent",
+  "type": "object",
+  "required": ["title", "start_time", "duration_minutes"],
+  "properties": {
+    "title": { "type": "string" },
+    "start_time": { "type": "string", "format": "date-time" },
+    "duration_minutes": { "type": "integer", "minimum": 5 },
+    "location": { "type": ["string", "null"] },
+    "priority": { "type": "string", "enum": ["low", "medium", "high"] },
+    "notes": { "type": ["string", "null"] },
+    "attendees": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "needs_travel": { "type": "boolean" },
+    "origin_location": { "type": ["string", "null"] }
+  }
+}

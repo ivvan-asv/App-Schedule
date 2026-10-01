@@ -1,0 +1,8 @@
+{
+  "name": "smart-scheduler-ai",
+  "private": true,
+  "scripts": {
+    "web": "pnpm --filter web dev",
+    "mobile": "pnpm --filter mobile start"
+  }
+}

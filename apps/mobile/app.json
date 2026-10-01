@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "Smart Scheduler AI",
+    "slug": "smart-scheduler-ai",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "platforms": ["ios", "android"],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Smart Scheduler usa el micrófono para capturar la intención por voz.",
+        "NSSpeechRecognitionUsageDescription": "La transcripción on-device convierte tu voz en un evento de calendario."
+      }
+    },
+    "android": {
+      "permissions": ["RECORD_AUDIO"]
+    },
+    "extra": {
+      "apiUrl": "http://localhost:8000/api/v1"
+    }
+  }
+}

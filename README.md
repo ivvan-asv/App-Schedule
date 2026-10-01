@@ -75,21 +75,18 @@
 smart-scheduler-ai/
 ├── apps/
 │   ├── mobile/             # Aplicación React Native (Expo)
-│   │   ├── ios/            # Extensiones y puentes nativos Swift (App Intents)
-│   │   ├── android/        # Extensiones nativas Kotlin
-│   │   └── src/            # Lógica compartida de UI y estado
 │   └── web/                # Portal Web y Landing de confirmación (Next.js)
 │
-├── services/
-│   └── api/                # Backend Orquestador FastAPI
-│       ├── app/
-│       │   ├── api/        # Routers y endpoints (v1)
-│       │   ├── core/       # Configuraciones y seguridad
-│       │   ├── engine/     # Algoritmo CSP con OR-Tools y cálculos de rutas
-│       │   ├── services/   # Clientes de IA, Calendarios y Mensajería
-│       │   └── models/     # Esquemas Pydantic y modelos de DB
-│       ├── tests/
-│       └── Dockerfile
+├── Backend/                # Backend Orquestador FastAPI (services/api)
+│   ├── app/
+│   │   ├── api/            # Routers y endpoints (v1)
+│   │   ├── core/           # Configuraciones y seguridad
+│   │   ├── engine/         # Algoritmo CSP con OR-Tools y cálculos de rutas
+│   │   ├── services/       # Clientes de IA, Calendarios y Mensajería
+│   │   ├── models/         # Modelos de DB
+│   │   └── schemas/        # Esquemas Pydantic
+│   ├── alembic/
+│   └── tests/
 │
 ├── packages/               # Paquetes compartidos (tipos, esquemas JSON, configs)
 ├── docker-compose.yml      # Entorno local para PostgreSQL, Redis y API
@@ -123,16 +120,18 @@ Campos clave en `.env`:
 * `META_WHATSAPP_TOKEN`
 * `DATABASE_URL` y `REDIS_URL`
 
+Sin claves de LLM el backend usa un extractor heurístico local para poder desarrollar el resto del pipeline.
+
 ### 3. Levantar Infraestructura y Backend
 ```bash
-# Iniciar PostgreSQL y Redis
-docker compose up -d postgres redis
+# Iniciar PostgreSQL, Redis y API
+docker compose up -d db redis
 
-# Iniciar el backend FastAPI
-cd services/api
+# Iniciar el backend FastAPI en local (hot reload)
 python -m venv .venv
 source .venv/bin/activate  # En Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+cd Backend
 uvicorn app.main:app --reload --port 8000
 ```
 La documentación interactiva estará disponible en `http://localhost:8000/docs`.
@@ -179,17 +178,20 @@ sequenceDiagram
 
 ## 🗺️ Hoja de Ruta (Roadmap)
 
-- [x] **Fase 1: Captura de Voz a Calendario (MVP)**
-  - Integración nativa de App Intents vinculables a Back Tap.
-  - Streaming STT + Extracción estructurada con LLM.
-  - Inserción local de eventos vía EventKit.
+- [ ] **Fase 1: Captura de Voz a Calendario (MVP)** — en desarrollo
+  - [x] Pipeline backend: intención en texto → JSON estructurado → evento persistido.
+  - [x] Portal web de captura y confirmación pública por token.
+  - [x] App Expo con el mismo contrato HTTP.
+  - [ ] Integración nativa de App Intents vinculables a Back Tap.
+  - [ ] Streaming STT + Extracción estructurada con LLM (Gemini/GPT; heurística activa sin API key).
+  - [ ] Inserción local de eventos vía EventKit / CalendarContract (hoy: calendario local en API).
 - [ ] **Fase 2: Motor de Rutas y Optimización CSP**
-  - Integración con Google Maps Distance Matrix.
-  - Algoritmo CSP con Google OR-Tools para gestión de bloques de tránsito.
-  - Sincronización remota con Google Calendar y Outlook Graph.
+  - [x] Esqueleto CSP con Google OR-Tools y estimación de traslado (Distance Matrix si hay API key).
+  - [ ] Integración completa con Google Maps Distance Matrix en producción.
+  - [ ] Sincronización remota con Google Calendar y Outlook Graph.
 - [ ] **Fase 3: Coordinación Externa Desatendida**
-  - Despacho de plantillas interactivas vía WhatsApp (Meta Cloud API).
-  - Webhooks y portal web ligero para confirmación sin autenticación requerida.
+  - [x] Invitaciones con token público y portal de confirmación sin cuenta.
+  - [ ] Despacho de plantillas interactivas vía WhatsApp (Meta Cloud API).
 - [ ] **Fase 4: Reprogramación Adaptativa**
   - Detección en segundo plano de desviaciones por tráfico o demoras.
   - Re-scheduling inteligente en cascada a un toque.
