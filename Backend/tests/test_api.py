@@ -1,9 +1,11 @@
 from datetime import UTC, datetime
 import uuid
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from app.core.config import Settings
 from app.core.database import get_db
 from app.main import app
 from app.models import User
@@ -37,7 +39,7 @@ class FakeSession:
         user.created_at = datetime.now(UTC)
 
 
-class ApiTests(unittest.TestCase):
+class BackendApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.session = FakeSession()
 
@@ -66,3 +68,18 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(second_response.status_code, 200)
         self.assertEqual(first_response.json()["id"], second_response.json()["id"])
         self.assertEqual(self.session.commits, 1)
+
+
+class SettingsNamingTests(unittest.TestCase):
+    def test_api_prefix_accepts_new_and_legacy_setting_names(self) -> None:
+        current_setting = Settings(_env_file=None, API_V1_PREFIX="/api/v2")
+        legacy_setting = Settings(_env_file=None, API_V1_STR="/legacy")
+
+        self.assertEqual(current_setting.API_V1_PREFIX, "/api/v2")
+        self.assertEqual(legacy_setting.API_V1_PREFIX, "/legacy")
+
+    def test_api_prefix_accepts_legacy_environment_variable(self) -> None:
+        with patch.dict("os.environ", {"API_V1_STR": "/legacy"}, clear=True):
+            setting = Settings(_env_file=None)
+
+        self.assertEqual(setting.API_V1_PREFIX, "/legacy")

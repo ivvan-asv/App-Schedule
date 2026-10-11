@@ -1,11 +1,15 @@
 import json
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Smart Scheduler AI"
-    API_V1_STR: str = "/api/v1"
+    API_V1_PREFIX: str = Field(
+        default="/api/v1",
+        validation_alias=AliasChoices("API_V1_PREFIX", "API_V1_STR"),
+    )
     DATABASE_URL: str = (
         "postgresql+asyncpg://postgres:postgrespassword"
         "@localhost:5432/smart_scheduler_db"
@@ -20,7 +24,7 @@ class Settings(BaseSettings):
     )
 
     @property
-    def cors_origin_list(self) -> list[str]:
+    def cors_origins(self) -> list[str]:
         if not self.CORS_ORIGINS:
             return []
 

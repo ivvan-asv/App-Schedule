@@ -18,23 +18,23 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",
     lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(api_router, prefix=settings.API_V1_STR)
+app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/", tags=["Health"])
-async def root():
+async def service_info() -> dict[str, str]:
     return {"service": settings.PROJECT_NAME, "docs": "/docs"}
 
 
