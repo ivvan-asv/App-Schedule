@@ -28,6 +28,27 @@ scaffold's original `users` table into `usuarios`.
 
 Health checks do not require PostgreSQL or Redis to be running.
 
+## Scheduling API (initial backend milestone)
+
+The scheduling endpoints use the existing `eventos` and `reglas_agenda` tables:
+
+- `POST /api/v1/users/{user_id}/availability-rules` creates a weekly working-hours rule.
+  Weekdays use ISO numbering (`1` = Monday, `7` = Sunday); times are local to the
+  user's configured timezone.
+- `GET /api/v1/users/{user_id}/availability-rules` lists active rules.
+- `GET /api/v1/users/{user_id}/availability/slots?from=...&to=...&duration_minutes=...`
+  returns candidate slots inside configured working hours, excluding tentative and
+  confirmed events. Slots advance by 15 minutes by default; `step_minutes` can
+  change that increment.
+- `POST /api/v1/users/{user_id}/events` creates a manual task or meeting and rejects
+  time conflicts with HTTP 409.
+- `GET /api/v1/users/{user_id}/events?from=...&to=...` lists events intersecting
+  the requested time range.
+
+All datetime query/body values must include a timezone. This initial availability
+service is deterministic slot enumeration, not yet the OR-Tools optimizer, and it
+does not include travel buffers or external calendar synchronization.
+
 ## Naming conventions
 
 - Python modules and files use lowercase `snake_case`; resource modules use
