@@ -81,3 +81,17 @@ PYTHONPATH=Backend python -m unittest discover -s Backend/tests
 ```
 
 The API tests use a fake database session and do not need external services.
+
+The integration tests in `Backend/tests/test_integration.py` run against a real
+PostgreSQL server and are skipped unless `TEST_DATABASE_URL` is set:
+
+```bash
+docker compose up -d db
+TEST_DATABASE_URL="postgresql+asyncpg://postgres:postgrespassword@localhost:5432/postgres" \
+  PYTHONPATH=Backend python -m unittest discover -s Backend/tests
+```
+
+Each run creates a throwaway `smart_scheduler_test_*` database, applies the
+Alembic migrations to it and drops it afterwards, so the development database
+is not modified. They check that every mapped ORM column exists in the migrated
+schema and exercise the scheduling endpoints end to end.

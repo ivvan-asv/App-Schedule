@@ -232,9 +232,3 @@ class AgendaRule(Base):
         nullable=False,
         server_default=text("true"),
     )
-    created_at: Mapped[datetime] = mapped_column(
-        "creado_en",
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
