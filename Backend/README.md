@@ -49,6 +49,39 @@ All datetime query/body values must include a timezone. This initial availabilit
 service is deterministic slot enumeration, not yet the OR-Tools optimizer, and it
 does not include travel buffers or external calendar synchronization.
 
+## Capture API (voice or text to event)
+
+`POST /api/v1/users/{user_id}/captures` turns a dictated note into a confirmed
+event. The iOS app transcribes speech on the device and sends only the text:
+
+```json
+{
+  "text": "mañana a las tres dentista una hora",
+  "channel": "voz",
+  "local_id": "9b2f6c1e-5a4d-4e8b-9c3a-2f1d0e7b6a54",
+  "captured_at": "2026-11-02T09:15:00-03:00",
+  "created_offline": false,
+  "stt_engine": "apple_speech"
+}
+```
+
+Only `text` is required. The note is parsed by an LLM with structured output
+(`CAPTURE_LLM_MODEL`, default `claude-haiku-5-5`) into a title, type, priority,
+duration and either a clock time or a time window. Relative dates ("mañana",
+"esta semana") are resolved against `captured_at` in the user's timezone.
+
+- With a clock time, the event is created at that time if it is free.
+- Without one, the event goes into the first free slot inside the window (or
+  the next seven days) within the user's working hours, and is marked
+  `flexible`.
+
+Responses: `201` with the capture and its event; `200` when a capture with the
+same `local_id` was already processed (safe retries from the offline queue);
+`409` when the time is taken or no slot is free; `422` when the note cannot be
+turned into an event; `503` when the LLM is unavailable or `ANTHROPIC_API_KEY`
+is not set. Every attempt is stored in `capturas`, including the model output,
+the error reason and `latencia_total_ms` (server-side processing time).
+
 ## Naming conventions
 
 - Python modules and files use lowercase `snake_case`; resource modules use
@@ -94,4 +127,15 @@ TEST_DATABASE_URL="postgresql+asyncpg://postgres:postgrespassword@localhost:5432
 Each run creates a throwaway `smart_scheduler_test_*` database, applies the
 Alembic migrations to it and drops it afterwards, so the development database
 is not modified. They check that every mapped ORM column exists in the migrated
-schema and exercise the scheduling endpoints end to end.
+schema and exercise the scheduling and capture endpoints end to end; the
+capture tests replace the LLM with a fake parser.
+
+Tests that call the real model are opt-in, because each run is billed (a
+fraction of a cent). They need `ANTHROPIC_API_KEY` in `.env`:
+
+```bash
+RUN_LLM_TESTS=1 PYTHONPATH=Backend python -m unittest Backend.tests.test_capture -v
+```
+
+They print each parsed result and its latency, which is the quickest way to
+check the model against the 3-second budget (RNF01).

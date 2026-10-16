@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     )
     REDIS_URL: str = "redis://localhost:6379/0"
     CORS_ORIGINS: str = ""
+    ANTHROPIC_API_KEY: str | None = None
+    CAPTURE_LLM_MODEL: str = "claude-haiku-5-5"
 
     model_config = SettingsConfigDict(
         env_file=".env",

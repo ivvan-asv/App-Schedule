@@ -69,19 +69,56 @@ async def get_active_user(session: AsyncSession, user_id: uuid.UUID) -> User:
     return user
 
 
+async def lock_active_user(session: AsyncSession, user_id: uuid.UUID) -> User:
+    """Lock the user row so concurrent writes to the same agenda run serially."""
+    result = await session.execute(
+        select(User)
+        .where(User.id == user_id, User.deleted_at.is_(None))
+        .with_for_update()
+    )
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return user
+
+
+def user_timezone(user: User) -> ZoneInfo:
+    try:
+        return ZoneInfo(user.timezone)
+    except ZoneInfoNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"User has an invalid timezone: {user.timezone}",
+        ) from error
+
+
+async def ensure_no_overlap(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    start: datetime,
+    end: datetime,
+) -> None:
+    overlapping = await session.execute(
+        select(Event.id).where(
+            Event.user_id == user_id,
+            Event.status.in_([EventStatus.TENTATIVE, EventStatus.CONFIRMED]),
+            Event.start < end,
+            Event.end > start,
+        ).limit(1)
+    )
+    if overlapping.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The requested time overlaps an existing event",
+        )
+
+
 async def create_event(
     session: AsyncSession,
     user_id: uuid.UUID,
     event_data: EventCreate,
 ) -> Event:
-    user_result = await session.execute(
-        select(User)
-        .where(User.id == user_id, User.deleted_at.is_(None))
-        .with_for_update()
-    )
-    user = user_result.scalar_one_or_none()
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    await lock_active_user(session, user_id)
 
     if event_data.location_id is not None:
         location_result = await session.execute(
@@ -96,19 +133,7 @@ async def create_event(
                 detail="Location not found for this user",
             )
 
-    overlapping = await session.execute(
-        select(Event.id).where(
-            Event.user_id == user_id,
-            Event.status.in_([EventStatus.TENTATIVE, EventStatus.CONFIRMED]),
-            Event.start < event_data.end,
-            Event.end > event_data.start,
-        ).limit(1)
-    )
-    if overlapping.scalar_one_or_none() is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="The requested time overlaps an existing event",
-        )
+    await ensure_no_overlap(session, user_id, event_data.start, event_data.end)
 
     event = Event(
         user_id=user_id,
@@ -212,13 +237,7 @@ async def find_available_slots(
         )
 
     user = await get_active_user(session, user_id)
-    try:
-        timezone = ZoneInfo(user.timezone)
-    except ZoneInfoNotFoundError as error:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"User has an invalid timezone: {user.timezone}",
-        ) from error
+    timezone = user_timezone(user)
 
     rules_result = await session.execute(
         select(AgendaRule).where(

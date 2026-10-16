@@ -82,6 +82,11 @@ class Event(Base):
         Uuid(as_uuid=True),
         ForeignKey("ubicaciones.id", ondelete="SET NULL"),
     )
+    capture_id: Mapped[uuid.UUID | None] = mapped_column(
+        "captura_id",
+        Uuid(as_uuid=True),
+        ForeignKey("capturas.id", ondelete="SET NULL"),
+    )
     title: Mapped[str] = mapped_column("titulo", String(255), nullable=False)
     description: Mapped[str | None] = mapped_column("descripcion", Text)
     type: Mapped[EventType] = mapped_column(
@@ -138,6 +143,14 @@ class Event(Base):
         Boolean,
         nullable=False,
         server_default=text("false"),
+    )
+    window_start: Mapped[datetime | None] = mapped_column(
+        "ventana_desde",
+        DateTime(timezone=True),
+    )
+    window_end: Mapped[datetime | None] = mapped_column(
+        "ventana_hasta",
+        DateTime(timezone=True),
     )
     created_at: Mapped[datetime] = mapped_column(
         "creado_en",

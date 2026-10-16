@@ -7,11 +7,13 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.database import engine
 from app.core.redis import redis_pool
+from app.services.capture_parser import close_capture_parser
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     yield
+    await close_capture_parser()
     await redis_pool.disconnect()
     await engine.dispose()
 
