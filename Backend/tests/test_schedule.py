@@ -1,11 +1,14 @@
 from datetime import datetime, timedelta
+from types import SimpleNamespace
+import uuid
 from zoneinfo import ZoneInfo
 import unittest
 
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.schemas.schedule import AgendaRuleCreate, EventCreate
-from app.services.schedule import generate_available_slots
+from app.services.schedule import ensure_no_overlap, generate_available_slots
 
 
 class ScheduleSlotTests(unittest.TestCase):
@@ -83,3 +86,40 @@ class ScheduleSlotTests(unittest.TestCase):
                 start_time="09:00",
                 end_time="17:00",
             )
+
+
+class FreeAgendaSession:
+    """Session whose agenda has no overlapping events."""
+
+    async def execute(self, statement: object) -> SimpleNamespace:
+        _ = statement
+        return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+
+class DeviceBusyOverlapTests(unittest.IsolatedAsyncioTestCase):
+    timezone = ZoneInfo("America/Santiago")
+
+    def at(self, hour: int, minute: int = 0) -> datetime:
+        return datetime(2026, 11, 3, hour, minute, tzinfo=self.timezone)
+
+    async def test_device_busy_time_is_a_conflict(self) -> None:
+        with self.assertRaises(HTTPException) as raised:
+            await ensure_no_overlap(
+                FreeAgendaSession(),
+                uuid.uuid4(),
+                self.at(10, 30),
+                self.at(11, 30),
+                [(self.at(11), self.at(12))],
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("device calendar", raised.exception.detail)
+
+    async def test_adjacent_device_busy_time_is_not_a_conflict(self) -> None:
+        await ensure_no_overlap(
+            FreeAgendaSession(),
+            uuid.uuid4(),
+            self.at(10),
+            self.at(11),
+            [(self.at(9), self.at(10)), (self.at(11), self.at(12))],
+        )

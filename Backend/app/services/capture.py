@@ -70,10 +70,11 @@ async def _choose_time(
     user_id: uuid.UUID,
     resolved: ResolvedCapture,
     earliest: datetime,
+    extra_busy: list[tuple[datetime, datetime]],
 ) -> tuple[datetime, datetime]:
     if resolved.start is not None:
         end = resolved.start + resolved.duration
-        await ensure_no_overlap(session, user_id, resolved.start, end)
+        await ensure_no_overlap(session, user_id, resolved.start, end, extra_busy)
         return resolved.start, end
 
     range_start = _round_up(max(resolved.window_start or earliest, earliest), SLOT_STEP_MINUTES)
@@ -91,6 +92,7 @@ async def _choose_time(
         range_end,
         int(resolved.duration.total_seconds() // 60),
         SLOT_STEP_MINUTES,
+        extra_busy,
     )
     if not slots:
         raise HTTPException(
@@ -168,7 +170,8 @@ async def process_capture(
 
         # Offline captures can arrive late; never schedule into the past.
         earliest = max(capture_data.captured_at, datetime.now(UTC))
-        start, end = await _choose_time(session, user_id, resolved, earliest)
+        device_busy = [(busy.start, busy.end) for busy in capture_data.busy_intervals]
+        start, end = await _choose_time(session, user_id, resolved, earliest, device_busy)
     except CaptureNotUnderstood as error:
         await _record_failure(session, capture, str(error), started)
         raise HTTPException(

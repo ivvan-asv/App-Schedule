@@ -35,8 +35,12 @@ class FakeSession:
         self.commits += 1
 
     async def refresh(self, user: User) -> None:
-        user.id = uuid.uuid4()
-        user.created_at = datetime.now(UTC)
+        # Stand-ins for the values PostgreSQL fills in.
+        user.id = user.id or uuid.uuid4()
+        user.created_at = user.created_at or datetime.now(UTC)
+        user.timezone = user.timezone or "America/Santiago"
+        if not isinstance(user.updated_at, datetime):
+            user.updated_at = datetime.now(UTC)
 
 
 class BackendApiTests(unittest.TestCase):
@@ -68,6 +72,28 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(second_response.status_code, 200)
         self.assertEqual(first_response.json()["id"], second_response.json()["id"])
         self.assertEqual(self.session.commits, 1)
+        self.assertEqual(first_response.json()["timezone"], "America/Santiago")
+
+    def test_update_user_sets_timezone(self) -> None:
+        user_id = self.client.post("/api/v1/users/demo").json()["id"]
+
+        response = self.client.patch(
+            f"/api/v1/users/{user_id}",
+            json={"timezone": "Europe/Madrid"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["timezone"], "Europe/Madrid")
+        self.assertEqual(response.json()["display_name"], "Demo User")
+
+    def test_update_user_rejects_unknown_timezone(self) -> None:
+        response = self.client.patch(
+            f"/api/v1/users/{uuid.uuid4()}",
+            json={"timezone": "Mars/Olympus_Mons"},
+        )
+
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(self.session.commits, 0)
 
 
 class SettingsNamingTests(unittest.TestCase):

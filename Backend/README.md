@@ -26,6 +26,11 @@ and is applied by the second migration. It creates all entities and
 relationships from that schema, and copies existing demo users from the
 scaffold's original `users` table into `usuarios`.
 
+`PATCH /api/v1/users/{user_id}` updates `display_name` and/or `timezone` (an
+IANA name such as `Europe/Madrid`; unknown names return 422). The timezone
+decides how relative dates in captures are read, so the iOS app sends the
+device timezone on first launch and again whenever it changes.
+
 Health checks do not require PostgreSQL or Redis to be running.
 
 ## Scheduling API (initial backend milestone)
@@ -65,7 +70,13 @@ event. The iOS app transcribes speech on the device and sends only the text:
 }
 ```
 
-Only `text` is required. The note is parsed by an LLM with structured output
+Only `text` is required. The app may also send `busy_intervals`, a list of
+`{"start", "end"}` times (at most 500) that are busy in calendars the backend
+does not see, such as the device calendar. They are treated like agenda events
+when choosing a slot or checking an explicit time (409 with "device calendar"
+in the detail) and are not stored.
+
+The note is parsed by an LLM with structured output
 (`CAPTURE_LLM_MODEL`, default `claude-haiku-5-5`) into a title, type, priority,
 duration and either a clock time or a time window. Relative dates ("mañana",
 "esta semana") are resolved against `captured_at` in the user's timezone.

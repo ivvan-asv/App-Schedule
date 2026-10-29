@@ -104,6 +104,32 @@ class CaptureCreateTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             CaptureCreate(text="   ")
 
+    def test_accepts_device_busy_intervals(self) -> None:
+        capture = CaptureCreate(
+            text="comprar pan",
+            busy_intervals=[
+                {"start": "2026-11-03T10:00:00-03:00", "end": "2026-11-03T11:00:00-03:00"},
+            ],
+        )
+
+        self.assertEqual(
+            capture.busy_intervals[0].start,
+            datetime(2026, 11, 3, 10, tzinfo=SANTIAGO),
+        )
+        self.assertEqual(CaptureCreate(text="comprar pan").busy_intervals, [])
+
+    def test_rejects_invalid_busy_intervals(self) -> None:
+        invalid = {
+            "naive": {"start": "2026-11-03T10:00:00", "end": "2026-11-03T11:00:00"},
+            "inverted": {
+                "start": "2026-11-03T11:00:00-03:00",
+                "end": "2026-11-03T10:00:00-03:00",
+            },
+        }
+        for case, interval in invalid.items():
+            with self.subTest(case=case), self.assertRaises(ValidationError):
+                CaptureCreate(text="comprar pan", busy_intervals=[interval])
+
 
 class FakeMessages:
     def __init__(self, result: object) -> None:

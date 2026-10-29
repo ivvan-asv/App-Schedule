@@ -4,3 +4,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+.build/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+iOS/SmartScheduler/Resources/Info.plist

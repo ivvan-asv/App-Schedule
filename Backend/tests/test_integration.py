@@ -158,6 +158,23 @@ class PostgresIntegrationTests(PostgresTestCase):
                 } - columns_by_table[table.name]
                 self.assertEqual(missing_columns, set())
 
+    async def test_user_update(self) -> None:
+        user_response = await self.client.post("/api/v1/users/demo")
+        user_url = f"/api/v1/users/{user_response.json()['id']}"
+
+        response = await self.client.patch(user_url, json={"timezone": "Europe/Madrid"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["timezone"], "Europe/Madrid")
+
+        restored = await self.client.patch(user_url, json={"timezone": "America/Santiago"})
+        self.assertEqual(restored.json()["timezone"], "America/Santiago")
+
+        missing = await self.client.patch(
+            f"/api/v1/users/{uuid.uuid4()}",
+            json={"timezone": "Europe/Madrid"},
+        )
+        self.assertEqual(missing.status_code, 404, missing.text)
+
     async def test_scheduling_flow(self) -> None:
         user_response = await self.client.post("/api/v1/users/demo")
         self.assertEqual(user_response.status_code, 200, user_response.text)
@@ -339,6 +356,40 @@ class CaptureIntegrationTests(PostgresTestCase):
         self.assertEqual(datetime.fromisoformat(event["start"]), self.monday.replace(hour=10))
         self.assertEqual(event["type"], "reunion")
         self.assertTrue(event["flexible"])
+
+    async def test_device_busy_intervals_are_avoided(self) -> None:
+        device_busy = [
+            {
+                "start": self.monday.replace(hour=9).isoformat(),
+                "end": self.monday.replace(hour=10, minute=30).isoformat(),
+            }
+        ]
+        self.use_parser(
+            self.parsed(
+                window_start_local=f"{self.monday:%Y-%m-%d}T00:00",
+                window_end_local=f"{self.monday:%Y-%m-%d}T23:59",
+            )
+        )
+
+        response = await self.client.post(
+            f"{self.user_url}/captures",
+            json={"text": "dentista el lunes", "busy_intervals": device_busy},
+        )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        event = response.json()["event"]
+        self.assertEqual(
+            datetime.fromisoformat(event["start"]),
+            self.monday.replace(hour=10, minute=30),
+        )
+
+        self.use_parser(self.parsed(start_local=f"{self.monday:%Y-%m-%d}T09:30"))
+        conflict = await self.client.post(
+            f"{self.user_url}/captures",
+            json={"text": "dentista el lunes a las 9:30", "busy_intervals": device_busy},
+        )
+        self.assertEqual(conflict.status_code, 409, conflict.text)
+        self.assertIn("device calendar", conflict.json()["detail"])
 
     async def test_failures_are_recorded_and_reported(self) -> None:
         taken = {

@@ -1,0 +1,52 @@
+# Xcode project spec for XcodeGen: `brew install xcodegen && xcodegen`
+# generates SmartScheduler.xcodeproj (not committed).
+name: SmartScheduler
+options:
+  bundleIdPrefix: ai.smartscheduler
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: es
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+packages:
+  SmartSchedulerKit:
+    path: SmartSchedulerKit
+
+targets:
+  SmartScheduler:
+    type: application
+    platform: iOS
+    sources:
+      - path: SmartScheduler
+    dependencies:
+      - package: SmartSchedulerKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.smartscheduler.app
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Smart Scheduler
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Smart Scheduler escucha tu nota para convertirla en un evento. El audio no se guarda."
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "La voz se transcribe en el dispositivo para entender qué quieres agendar."
+        INFOPLIST_KEY_NSCalendarsWriteOnlyAccessUsageDescription: "Smart Scheduler añade a tu calendario los eventos que dictas."
+        INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription: "Smart Scheduler añade los eventos que dictas y evita tus otros compromisos al elegir hora. Solo usa las horas de inicio y fin."
+    info:
+      path: SmartScheduler/Resources/Info.plist
+      properties:
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers:
+          - ai.smartscheduler.flush-captures
+        NSAppTransportSecurity:
+          # Development only: lets the app reach the local FastAPI server over
+          # plain HTTP. Production must use HTTPS with TLS 1.3 (RNF02).
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: "Para conectar con el servidor de Smart Scheduler en tu red local."

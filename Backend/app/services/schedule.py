@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone as datetime_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import uuid
@@ -97,6 +98,7 @@ async def ensure_no_overlap(
     user_id: uuid.UUID,
     start: datetime,
     end: datetime,
+    extra_busy: Sequence[tuple[datetime, datetime]] = (),
 ) -> None:
     overlapping = await session.execute(
         select(Event.id).where(
@@ -110,6 +112,11 @@ async def ensure_no_overlap(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="The requested time overlaps an existing event",
+        )
+    if any(busy_start < end and start < busy_end for busy_start, busy_end in extra_busy):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The requested time overlaps an event in the device calendar",
         )
 
 
@@ -219,7 +226,9 @@ async def find_available_slots(
     range_end: datetime,
     duration_minutes: int,
     step_minutes: int,
+    extra_busy: Sequence[tuple[datetime, datetime]] = (),
 ) -> list[tuple[datetime, datetime]]:
+    """Free slots inside working hours, avoiding agenda events and `extra_busy`."""
     if range_start.utcoffset() is None or range_end.utcoffset() is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -264,6 +273,7 @@ async def find_available_slots(
     busy_intervals = [
         (event.start, event.end) for event in events_result.scalars().all()
     ]
+    busy_intervals.extend(extra_busy)
     windows = _working_windows(rules, timezone, range_start, range_end)
     return generate_available_slots(
         windows,

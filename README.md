@@ -26,10 +26,10 @@
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        CLIENTES & INTERFACES                          │
 ├───────────────────────────────────┬────────────────────────────────────┤
-│           Móvil (React Native/Expo)│       Web Portal (Next.js 14)      │
-│  [Swift Bridge]   [Kotlin Bridge] │   - Confirmación rápida (URLs)     │
-│  • App Intents     • Quick Settings│   - Panel de usuario & métricas    │
-│  • Speech/EventKit • App Actions   │   - Tailwind CSS                   │
+│      iOS nativo (Swift/SwiftUI)   │       Web Portal (Next.js 14)      │
+│  • App Intents (Back Tap/Acción)  │   - Confirmación rápida (URLs)     │
+│  • Speech on-device               │   - Panel de usuario & métricas    │
+│  • EventKit • Cola offline        │   - Tailwind CSS                   │
 └─────────────────┬─────────────────┴──────────────────┬─────────────────┘
                   │                                    │
                   └────────────► HTTPS / WSS ◄─────────┘
@@ -58,7 +58,7 @@
 
 | Capa | Tecnologías |
 | :--- | :--- |
-| **Mobile App** | React Native (Expo), Swift Modules (App Intents, EventKit, Speech), Kotlin Modules |
+| **App iOS** | Swift 6, SwiftUI, App Intents, Speech, EventKit, BackgroundTasks (iOS 17+) |
 | **Web & Landing** | Next.js (App Router), React, Tailwind CSS |
 | **Backend API** | Python 3.11+, FastAPI, Uvicorn, Pydantic v2 |
 | **Motor de Optimización**| Google OR-Tools (Constraint Satisfaction Problem Solver) |
@@ -71,27 +71,21 @@
 ## 📂 Estructura del Repositorio
 
 ```bash
-smart-scheduler-ai/
-├── apps/
-│   ├── mobile/             # Aplicación React Native (Expo)
-│   │   ├── ios/            # Extensiones y puentes nativos Swift (App Intents)
-│   │   ├── android/        # Extensiones nativas Kotlin
-│   │   └── src/            # Lógica compartida de UI y estado
-│   └── web/                # Portal Web y Landing de confirmación (Next.js)
-│
-├── services/
-│   └── api/                # Backend Orquestador FastAPI
-│       ├── app/
-│       │   ├── api/        # Routers y endpoints (v1)
-│       │   ├── core/       # Configuraciones y seguridad
-│       │   ├── engine/     # Algoritmo CSP con OR-Tools y cálculos de rutas
-│       │   ├── services/   # Clientes de IA, Calendarios y Mensajería
-│       │   └── models/     # Esquemas Pydantic y modelos de DB
-│       ├── tests/
-│       └── Dockerfile
-│
-├── packages/               # Paquetes compartidos (tipos, esquemas JSON, configs)
-├── docker-compose.yml      # Entorno local para PostgreSQL, Redis y API
+App-Schedule/
+├── Backend/                # Backend orquestador FastAPI
+│   ├── app/
+│   │   ├── api/v1/         # Routers y endpoints
+│   │   ├── core/           # Configuración, base de datos, Redis
+│   │   ├── models/         # Modelos SQLAlchemy (tablas del esquema SQL)
+│   │   ├── schemas/        # Esquemas Pydantic
+│   │   └── services/       # Agenda, capturas y cliente LLM
+│   ├── migrations/         # Alembic + esquema SQL de referencia
+│   └── tests/
+├── iOS/                    # Cliente nativo Swift (ver iOS/README.md)
+│   ├── project.yml         # Proyecto Xcode (XcodeGen)
+│   ├── SmartSchedulerKit/  # Paquete Swift: API, cuenta, cola offline
+│   └── SmartScheduler/     # App SwiftUI, App Intents, Speech, EventKit
+├── docker-compose.yml      # PostgreSQL y Redis locales
 └── README.md
 ```
 
@@ -100,10 +94,9 @@ smart-scheduler-ai/
 ## 🚀 Puesta en Marcha Local
 
 ### Prerrequisitos
-* **Node.js** >= 18.x & **pnpm** / **npm**
 * **Python** >= 3.11
 * **Docker** & **Docker Compose**
-* Xcode (opcional, para compilar módulos nativos iOS en simulador/dispositivo)
+* **Xcode** 16+ y **XcodeGen** (`brew install xcodegen`) para la app iOS
 
 ### 1. Clonar el repositorio
 ```bash
@@ -123,30 +116,23 @@ Campos clave en `.env`:
 * `DATABASE_URL` y `REDIS_URL`
 
 ### 3. Levantar Infraestructura y Backend
+Los pasos detallados están en [Backend/README.md](Backend/README.md):
 ```bash
-# Iniciar PostgreSQL y Redis
-docker compose up -d postgres redis
-
-# Iniciar el backend FastAPI
-cd services/api
-python -m venv .venv
-source .venv/bin/activate  # En Windows: .venv\Scripts\activate
+docker compose up -d db redis
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+alembic -c alembic.ini upgrade head
+uvicorn app.main:app --app-dir Backend --reload --host 0.0.0.0
 ```
 La documentación interactiva estará disponible en `http://localhost:8000/docs`.
 
-### 4. Iniciar Frontend Móvil y Web
+### 4. App iOS
 ```bash
-# En la raíz del proyecto
-pnpm install
-
-# Para iniciar el portal Web (Next.js)
-pnpm --filter web dev
-
-# Para iniciar Expo (Mobile)
-pnpm --filter mobile start
+cd iOS
+xcodegen
+open SmartScheduler.xcodeproj
 ```
+Configuración de Back Tap y del servidor en [iOS/README.md](iOS/README.md).
 
 ---
 
@@ -183,6 +169,7 @@ sequenceDiagram
   - Streaming STT + Extracción estructurada con LLM.
   - Inserción local de eventos vía EventKit.
 - [ ] **Fase 2: Motor de Rutas y Optimización CSP**
+  - [x] Las capturas evitan las horas ocupadas del calendario del iPhone (EventKit, solo horas).
   - Integración con Google Maps Distance Matrix.
   - Algoritmo CSP con Google OR-Tools para gestión de bloques de tránsito.
   - Sincronización remota con Google Calendar y Outlook Graph.
