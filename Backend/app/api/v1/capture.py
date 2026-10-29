@@ -1,11 +1,13 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Response, status
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.schemas.capture import CaptureCreate, CaptureRead
 from app.schemas.schedule import EventRead
+from app.services.calendar_accounts import get_calendar_http
 from app.services.capture import process_capture
 from app.services.capture_parser import CaptureParser, get_capture_parser
 
@@ -29,8 +31,9 @@ async def post_capture(
     response: Response,
     session: AsyncSession = Depends(get_db),
     parser: CaptureParser = Depends(get_capture_parser),
+    calendar_http: httpx.AsyncClient = Depends(get_calendar_http),
 ) -> CaptureRead:
-    outcome = await process_capture(session, user_id, capture_data, parser)
+    outcome = await process_capture(session, user_id, capture_data, parser, calendar_http)
     if not outcome.created:
         response.status_code = status.HTTP_200_OK
 
@@ -44,4 +47,5 @@ async def post_capture(
         processed_at=capture.processed_at,
         latency_ms=capture.latency_ms,
         event=EventRead.model_validate(outcome.event) if outcome.event else None,
+        location_query=(capture.llm_result or {}).get("location_query"),
     )

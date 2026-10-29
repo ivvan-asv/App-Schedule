@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Enum as SqlEnum,
     ForeignKey,
+    Integer,
     Numeric,
     SmallInteger,
     String,
@@ -50,6 +51,13 @@ class EventOrigin(str, Enum):
     SYNC = "sincronizacion"
 
 
+class TravelMode(str, Enum):
+    CAR = "auto"
+    TRANSIT = "transporte_publico"
+    WALKING = "caminando"
+    CYCLING = "bicicleta"
+
+
 class AgendaRuleType(str, Enum):
     WORKING_HOURS = "horario_laboral"
     MEAL = "comida"
@@ -86,6 +94,12 @@ class Event(Base):
         "captura_id",
         Uuid(as_uuid=True),
         ForeignKey("capturas.id", ondelete="SET NULL"),
+    )
+    # Travel and buffer blocks point at the event they belong to.
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        "evento_padre_id",
+        Uuid(as_uuid=True),
+        ForeignKey("eventos.id", ondelete="CASCADE"),
     )
     title: Mapped[str] = mapped_column("titulo", String(255), nullable=False)
     description: Mapped[str | None] = mapped_column("descripcion", Text)
@@ -194,6 +208,44 @@ class Location(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         "creado_en",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class Travel(Base):
+    """How a travel block (an event of type 'traslado') was calculated."""
+
+    __tablename__ = "traslados"
+
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        "evento_id",
+        Uuid(as_uuid=True),
+        ForeignKey("eventos.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    origin_id: Mapped[uuid.UUID | None] = mapped_column(
+        "origen_id",
+        Uuid(as_uuid=True),
+        ForeignKey("ubicaciones.id", ondelete="SET NULL"),
+    )
+    destination_id: Mapped[uuid.UUID | None] = mapped_column(
+        "destino_id",
+        Uuid(as_uuid=True),
+        ForeignKey("ubicaciones.id", ondelete="SET NULL"),
+    )
+    mode: Mapped[TravelMode] = mapped_column(
+        "modo",
+        SqlEnum(TravelMode, name="modo_transporte_t", values_callable=_enum_values),
+        nullable=False,
+        server_default=text("'auto'"),
+    )
+    duration_seconds: Mapped[int] = mapped_column("duracion_seg", Integer, nullable=False)
+    distance_meters: Mapped[int | None] = mapped_column("distancia_m", Integer)
+    provider: Mapped[str] = mapped_column("proveedor_rutas", String(30), nullable=False)
+    calculated_at: Mapped[datetime] = mapped_column(
+        "calculado_en",
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),

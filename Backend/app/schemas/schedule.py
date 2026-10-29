@@ -4,7 +4,29 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.models.schedule import AgendaRuleType, EventPriority, EventStatus, EventType
+from app.models.schedule import (
+    AgendaRuleType,
+    EventPriority,
+    EventStatus,
+    EventType,
+    TravelMode,
+)
+
+MAX_BUSY_INTERVALS = 500
+MAX_TRAVEL_SECONDS = 12 * 60 * 60
+
+
+class BusyInterval(BaseModel):
+    start: datetime
+    end: datetime
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "BusyInterval":
+        if self.start.utcoffset() is None or self.end.utcoffset() is None:
+            raise ValueError("busy interval start and end must include a timezone")
+        if self.end <= self.start:
+            raise ValueError("busy interval end must be later than start")
+        return self
 
 
 class EventCreate(BaseModel):
@@ -39,6 +61,71 @@ class EventRead(BaseModel):
     end: datetime
     location_id: uuid.UUID | None
     flexible: bool
+    parent_id: uuid.UUID | None = None
+
+
+class LocationCreate(BaseModel):
+    alias: str | None = Field(default=None, max_length=80)
+    address: str | None = None
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    place_id: str | None = Field(default=None, max_length=255)
+    is_frequent: bool = False
+
+
+class LocationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    alias: str | None
+    address: str | None
+    latitude: float
+    longitude: float
+    place_id: str | None
+    is_frequent: bool
+
+
+class TravelInput(BaseModel):
+    """A travel time the app estimated with its map service (MapKit)."""
+
+    origin_location_id: uuid.UUID | None = Field(
+        default=None,
+        description="Saved origin; null when the trip starts at the user's current position.",
+    )
+    duration_seconds: int = Field(ge=0, le=MAX_TRAVEL_SECONDS)
+    distance_meters: int | None = Field(default=None, ge=0)
+    mode: TravelMode = TravelMode.CAR
+    provider: str = Field(default="mapkit", min_length=1, max_length=30)
+
+
+class EventLocationUpdate(BaseModel):
+    location_id: uuid.UUID | None = Field(default=None, description="A saved location.")
+    location: LocationCreate | None = Field(
+        default=None,
+        description="A new place; reused when the user already saved the same one.",
+    )
+    travel: TravelInput | None = None
+    busy_intervals: list[BusyInterval] = Field(
+        default_factory=list,
+        max_length=MAX_BUSY_INTERVALS,
+        description="Device-calendar busy times, used if the event has to move.",
+    )
+
+    @model_validator(mode="after")
+    def validate_destination(self) -> "EventLocationUpdate":
+        if (self.location_id is None) == (self.location is None):
+            raise ValueError("give exactly one of location_id or location")
+        return self
+
+
+class EventLocationRead(BaseModel):
+    event: EventRead
+    location: LocationRead
+    travel: EventRead | None
+    moved: bool = Field(description="A flexible event was moved so the trip fits.")
+    travel_overlaps: bool = Field(
+        description="The trip overlaps another commitment; the user may arrive late.",
+    )
 
 
 class AgendaRuleCreate(BaseModel):
@@ -58,6 +145,12 @@ class AgendaRuleCreate(BaseModel):
         if self.end_time <= self.start_time:
             raise ValueError("end_time must be later than start_time")
         return self
+
+
+class WorkingHoursReplace(BaseModel):
+    """The whole weekly schedule; it replaces every working-hours rule."""
+
+    rules: list[AgendaRuleCreate] = Field(min_length=1, max_length=14)
 
 
 class AgendaRuleRead(BaseModel):

@@ -95,6 +95,14 @@ public struct SchedulerAPI: Sendable {
         try await send("POST", "users/\(userID.uuidString)/availability-rules", body: rule)
     }
 
+    /// Replaces the whole weekly schedule.
+    public func replaceWorkingHours(
+        userID: UUID,
+        _ rules: [WorkingHoursRuleRequest]
+    ) async throws -> [WorkingHoursRule] {
+        try await send("PUT", "users/\(userID.uuidString)/working-hours", body: ["rules": rules])
+    }
+
     public func submitCapture(
         userID: UUID,
         _ capture: CaptureRequest,
@@ -106,6 +114,32 @@ public struct SchedulerAPI: Sendable {
             body: CapturePayload(capture: capture, busyIntervals: busyIntervals)
         )
         return CaptureSubmission(result: result, alreadyProcessed: status == 200)
+    }
+
+    public func locations(userID: UUID) async throws -> [SavedLocation] {
+        try await send("GET", "users/\(userID.uuidString)/locations")
+    }
+
+    /// Saves a place; one with the same alias ("Casa") is moved instead of duplicated.
+    public func saveLocation(userID: UUID, _ location: LocationInput) async throws -> SavedLocation {
+        try await send("POST", "users/\(userID.uuidString)/locations", body: location)
+    }
+
+    public func deleteLocation(userID: UUID, locationID: UUID) async throws {
+        try await delete("users/\(userID.uuidString)/locations/\(locationID.uuidString)")
+    }
+
+    /// Sets where an event happens and inserts the travel block before it.
+    public func setEventLocation(
+        userID: UUID,
+        eventID: UUID,
+        _ update: EventLocationUpdate
+    ) async throws -> EventLocationResult {
+        try await send(
+            "PUT",
+            "users/\(userID.uuidString)/events/\(eventID.uuidString)/location",
+            body: update
+        )
     }
 
     public func events(userID: UUID, from: Date, to: Date) async throws -> [ScheduledEvent] {
@@ -120,6 +154,18 @@ public struct SchedulerAPI: Sendable {
     }
 
     // MARK: - Request plumbing
+
+    func get<Response: Decodable>(_ path: String) async throws -> Response {
+        try await send("GET", path)
+    }
+
+    func post<Response: Decodable>(_ path: String) async throws -> Response {
+        try await send("POST", path)
+    }
+
+    func delete(_ path: String) async throws {
+        let _: NoContent = try await send("DELETE", path)
+    }
 
     /// The stored capture plus `busy_intervals`, which are read fresh from the
     /// device calendar on every attempt instead of being queued with the note.
@@ -139,6 +185,9 @@ public struct SchedulerAPI: Sendable {
     }
 
     private struct EmptyBody: Encodable {}
+
+    /// Stands for a 204 response, which has no JSON to decode.
+    private struct NoContent: Decodable {}
 
     private func send<Response: Decodable>(
         _ method: String,
@@ -180,6 +229,9 @@ public struct SchedulerAPI: Sendable {
 
         guard (200..<300).contains(response.statusCode) else {
             throw Self.error(status: response.statusCode, data: data)
+        }
+        if Response.self == NoContent.self, let empty = NoContent() as? Response {
+            return (empty, response.statusCode)
         }
         do {
             return (try SchedulerJSON.decoder().decode(Response.self, from: data), response.statusCode)

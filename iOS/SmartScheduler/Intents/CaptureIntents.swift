@@ -25,7 +25,7 @@ struct ScheduleNoteIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let banner = await AppModel.shared.submit(note, channel: .voice, sttEngine: "siri_dictation")
         let message: String = switch banner {
-        case .scheduled(let event): "Listo: \(event.title), \(event.summary)."
+        case .scheduled(let scheduled): "Listo: \(scheduled.event.title), \(scheduled.summary)"
         case .queued: "Sin conexión. Lo agendaré en cuanto vuelva la red."
         case .rejected(let reason): "No pude agendarlo: \(reason)"
         case .failed(let reason): "Algo falló: \(reason)"

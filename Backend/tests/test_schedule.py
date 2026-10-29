@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.schemas.schedule import AgendaRuleCreate, EventCreate
+from app.services.location import travel_block_duration
 from app.services.schedule import ensure_no_overlap, generate_available_slots
 
 
@@ -123,3 +124,15 @@ class DeviceBusyOverlapTests(unittest.IsolatedAsyncioTestCase):
             self.at(11),
             [(self.at(9), self.at(10)), (self.at(11), self.at(12))],
         )
+
+
+class TravelBlockDurationTests(unittest.TestCase):
+    def test_rounds_trips_up_to_five_minutes(self) -> None:
+        cases = {60: 5, 5 * 60: 5, 5 * 60 + 1: 10, 22 * 60: 25, 3600: 60}
+        for seconds, minutes in cases.items():
+            with self.subTest(seconds=seconds):
+                self.assertEqual(travel_block_duration(seconds), timedelta(minutes=minutes))
+
+    def test_very_short_trips_have_no_block(self) -> None:
+        self.assertIsNone(travel_block_duration(0))
+        self.assertIsNone(travel_block_duration(59))

@@ -93,6 +93,58 @@ turned into an event; `503` when the LLM is unavailable or `ANTHROPIC_API_KEY`
 is not set. Every attempt is stored in `capturas`, including the model output,
 the error reason and `latencia_total_ms` (server-side processing time).
 
+## Locations and travel blocks
+
+Travel times are estimated on the phone with Apple Maps (MapKit), so the
+backend needs no maps API key. The capture response includes
+`location_query` when the note names a place ("dentista en Providencia"); the
+app resolves it and calls:
+
+- `GET/POST /api/v1/users/{user_id}/locations` lists or saves places. Saving
+  a place with an existing alias ("Casa") moves it instead of adding another.
+  `DELETE .../locations/{location_id}` removes one.
+- `PUT /api/v1/users/{user_id}/events/{event_id}/location` sets where an
+  event happens, with `location_id` (a saved place) or `location` (a new one;
+  reused when the same `place_id` or coordinates already exist). With
+  `travel` (`duration_seconds`, optional `origin_location_id`,
+  `distance_meters`, `mode`, `provider`) it inserts a `traslado` event right
+  before the event, rounded up to 5 minutes and linked with `evento_padre_id`,
+  plus its detail row in `traslados`. Trips under a minute get no block.
+
+If the trip overlaps another event or a device busy time (`busy_intervals`),
+a flexible event moves to the first slot in its window with room for the trip
+(`moved: true`); a fixed one keeps its time and the response says
+`travel_overlaps: true`. Calling it again replaces the previous travel block.
+A new event inserted between two others does not yet recalculate the trip of
+the following one; that cascade belongs to adaptive rescheduling (phase 4).
+
+## Working hours
+
+`PUT /api/v1/users/{user_id}/working-hours` replaces the whole weekly schedule
+in one transaction, with a body like
+`{"rules": [{"weekdays": [1, 2, 3, 4], "start_time": "09:00", "end_time": "18:00"}]}`
+(at least one rule). The iOS settings screen edits one range per day and
+groups equal days into rules.
+
+## Connected calendars (Google, Outlook)
+
+Setup, credentials and troubleshooting: [docs/calendar-credentials.md](../docs/calendar-credentials.md).
+
+- `GET /api/v1/calendar-providers` says which providers have credentials,
+  what is missing and the redirect URI to register.
+- `POST /api/v1/users/{user_id}/calendar-accounts/{google|microsoft}/authorize`
+  returns the consent URL (503 naming the missing `.env` variables when not
+  configured). The provider redirects to `/api/v1/oauth/{provider}/callback`,
+  which stores the tokens AES-256-GCM encrypted and sends the browser back to
+  `APP_OAUTH_CALLBACK_URL`. The OAuth state lives in Redis for 10 minutes.
+- `GET .../calendar-accounts` lists them; `DELETE .../calendar-accounts/{id}`
+  forgets one.
+
+Captures then avoid busy times of active accounts for the next 14 days,
+fetched in parallel with a 1.5 s limit per provider; a failing provider is
+skipped, and one whose access was revoked is marked `token_expirado`. Writing
+events to those calendars is not implemented yet.
+
 ## Naming conventions
 
 - Python modules and files use lowercase `snake_case`; resource modules use

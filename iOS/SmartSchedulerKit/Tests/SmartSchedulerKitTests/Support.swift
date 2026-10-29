@@ -64,7 +64,7 @@ final class RecordingMirror: CalendarMirror, @unchecked Sendable {
         lock.withLock { events }
     }
 
-    func mirror(_ event: ScheduledEvent) async {
+    func mirror(_ event: ScheduledEvent, location: SavedLocation?) async {
         lock.withLock { events.append(event) }
     }
 }
@@ -87,21 +87,31 @@ func userJSON(timezone: String = "America/Santiago") -> String {
     """
 }
 
-func eventJSON(id: UUID = UUID(), title: String = "Dentista") -> String {
-    """
+func eventJSON(
+    id: UUID = UUID(),
+    title: String = "Dentista",
+    type: String = "tarea",
+    start: String = "2026-11-03T18:00:00Z",
+    end: String = "2026-11-03T19:00:00Z",
+    locationId: UUID? = nil,
+    parentId: UUID? = nil
+) -> String {
+    func json(_ id: UUID?) -> String { id.map { "\"\($0.uuidString)\"" } ?? "null" }
+    return """
     {"id": "\(id.uuidString)", "title": "\(title)", "description": null,
-     "type": "tarea", "status": "confirmado", "priority": "media",
-     "start": "2026-11-03T18:00:00Z", "end": "2026-11-03T19:00:00Z",
-     "location_id": null, "flexible": false}
+     "type": "\(type)", "status": "confirmado", "priority": "media",
+     "start": "\(start)", "end": "\(end)",
+     "location_id": \(json(locationId)), "flexible": false, "parent_id": \(json(parentId))}
     """
 }
 
-func captureJSON(event: String?) -> String {
-    """
+func captureJSON(event: String?, locationQuery: String? = nil) -> String {
+    let query = locationQuery.map { "\"\($0)\"" } ?? "null"
+    return """
     {"id": "\(UUID().uuidString)", "status": "procesada", "channel": "voz",
      "transcription": "mañana a las tres dentista", "captured_at": "2026-11-02T12:15:00Z",
      "processed_at": "2026-11-02T12:15:01.204Z", "latency_ms": 1204,
-     "event": \(event ?? "null")}
+     "event": \(event ?? "null"), "location_query": \(query)}
     """
 }
 
@@ -136,4 +146,67 @@ func busy(_ startHour: Double, _ endHour: Double) -> BusyInterval {
         start: base.addingTimeInterval(startHour * 3_600),
         end: base.addingTimeInterval(endHour * 3_600)
     )
+}
+
+final class FakePlaces: PlaceSearching, @unchecked Sendable {
+    private let lock = NSLock()
+    private let result: ResolvedPlace?
+    private var searches: [(String, Coordinate?)] = []
+
+    init(_ result: ResolvedPlace?) {
+        self.result = result
+    }
+
+    var queries: [(String, Coordinate?)] {
+        lock.withLock { searches }
+    }
+
+    func searchPlace(_ query: String, near: Coordinate?) async -> ResolvedPlace? {
+        lock.withLock { searches.append((query, near)) }
+        return result
+    }
+}
+
+final class FakeRoutes: RouteEstimating, @unchecked Sendable {
+    private let lock = NSLock()
+    private let result: RouteEstimate?
+    private var calls: [(Coordinate, Coordinate, Date)] = []
+
+    init(_ result: RouteEstimate?) {
+        self.result = result
+    }
+
+    var requests: [(Coordinate, Coordinate, Date)] {
+        lock.withLock { calls }
+    }
+
+    func estimateRoute(from origin: Coordinate, to destination: Coordinate, arrivingAt arrival: Date) async -> RouteEstimate? {
+        lock.withLock { calls.append((origin, destination, arrival)) }
+        return result
+    }
+}
+
+struct FixedLocation: CurrentLocationProviding {
+    let coordinate: Coordinate?
+
+    func currentCoordinate() async -> Coordinate? { coordinate }
+}
+
+let home = Coordinate(latitude: -33.4489, longitude: -70.6693)
+let office = Coordinate(latitude: -33.4372, longitude: -70.6506)
+let dentist = Coordinate(latitude: -33.4263, longitude: -70.6170)
+
+func locationJSON(id: UUID, alias: String, _ coordinate: Coordinate) -> String {
+    """
+    {"id": "\(id.uuidString)", "alias": "\(alias)", "address": null,
+     "latitude": \(coordinate.latitude), "longitude": \(coordinate.longitude),
+     "place_id": null, "is_frequent": true}
+    """
+}
+
+/// UTC calendar so "same day" in the tests does not depend on the machine.
+var utcCalendar: Calendar {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "UTC")!
+    return calendar
 }

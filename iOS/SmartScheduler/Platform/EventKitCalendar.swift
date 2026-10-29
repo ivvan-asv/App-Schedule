@@ -1,3 +1,4 @@
+import CoreLocation
 import EventKit
 import Foundation
 import OSLog
@@ -49,7 +50,7 @@ actor EventKitCalendar: CalendarMirror, BusyTimeProvider {
 
     /// A ledger of mirrored backend ids prevents duplicates when a queued
     /// capture is resent and the backend returns the same event again.
-    func mirror(_ event: ScheduledEvent) async {
+    func mirror(_ event: ScheduledEvent, location: SavedLocation?) async {
         let key = Self.ledgerPrefix + event.id.uuidString
         guard ledger.string(forKey: key) == nil, event.status != .cancelled else { return }
         guard [.writeOnly, .full].contains(Self.access) else { return }
@@ -61,6 +62,12 @@ actor EventKitCalendar: CalendarMirror, BusyTimeProvider {
         calendarEvent.notes = event.description ?? "Agendado con Smart Scheduler"
         calendarEvent.availability = event.status == .tentative ? .tentative : .busy
         calendarEvent.calendar = eventStore.defaultCalendarForNewEvents
+        if let location {
+            let structured = EKStructuredLocation(title: location.displayName)
+            structured.geoLocation = CLLocation(latitude: location.latitude, longitude: location.longitude)
+            calendarEvent.structuredLocation = structured
+            calendarEvent.location = location.address ?? location.displayName
+        }
 
         do {
             try eventStore.save(calendarEvent, span: .thisEvent)

@@ -38,6 +38,7 @@ targets:
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Smart Scheduler escucha tu nota para convertirla en un evento. El audio no se guarda."
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "La voz se transcribe en el dispositivo para entender qué quieres agendar."
         INFOPLIST_KEY_NSCalendarsWriteOnlyAccessUsageDescription: "Smart Scheduler añade a tu calendario los eventos que dictas."
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "Para calcular cuánto tardas en llegar a tus compromisos. La ubicación no se guarda de forma continua."
         INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription: "Smart Scheduler añade los eventos que dictas y evita tus otros compromisos al elegir hora. Solo usa las horas de inicio y fin."
     info:
       path: SmartScheduler/Resources/Info.plist

@@ -35,6 +35,9 @@ iOS/
 | RF03 Extracción | La hace el backend (`POST /users/{id}/captures`); la app solo envía el texto. |
 | Fase 1: EventKit | `EventKitCalendar` escribe cada evento agendado en el calendario del iPhone y no lo duplica si una captura se reenvía. |
 | Fase 2: calendario local | Con acceso completo, cada captura envía las horas ocupadas de los próximos 14 días (`busy_intervals`), sin títulos ni asistentes. Se omiten los eventos de todo el día, los marcados como libres y las invitaciones rechazadas. Se leen al enviar, no al encolar, para que una nota en cola use el calendario actual. |
+| RF04 Traslados | Si la nota nombra un lugar, `TravelPlanner` lo busca entre los lugares guardados ("la oficina") o con Apple Maps cerca de casa. El origen es el evento anterior con lugar ese día, tu ubicación actual si el evento es en menos de 3 horas, o "Casa". El tiempo en auto con tráfico lo calcula `MKDirections`. El backend inserta el bloque "Traslado" y mueve el evento si es flexible y no cabe. Todo esto ocurre antes de escribir en el calendario del iPhone. Si algo falla, la nota queda agendada sin traslado. |
+| RF07 Calendarios externos | **Ajustes › Calendarios conectados** abre la página de Google o Microsoft en `ASWebAuthenticationSession`; el backend guarda los tokens y las capturas evitan esas horas ocupadas. Mientras falten credenciales en el servidor, la sección dice qué variables faltan. Ver [docs/calendar-credentials.md](../docs/calendar-credentials.md). |
+| Horario laboral | **Ajustes › Horario laboral**: un rango por día; las notas sin hora se colocan dentro. |
 | RNF01 Latencia | Se usa la transcripción parcial sin esperar el resultado final. El backend devuelve `latency_ms`. |
 | RNF02 Privacidad | El audio solo pasa por memoria. La cola offline se guarda con `completeFileProtectionUntilFirstUserAuthentication`, que la cifra con AES-256 en reposo. |
 | RNF03 Offline | Si el servidor no responde o el LLM devuelve 503, la nota queda en cola con su `local_id`. Se reenvía al recuperar la red (`NWPathMonitor`), al volver a primer plano o en un `BGAppRefreshTask`. El backend devuelve la captura original en vez de duplicarla. |
@@ -71,6 +74,12 @@ En el primer uso la app crea el usuario demo, le asigna la zona horaria del
 dispositivo y, si no tiene ninguno, crea un horario laboral de lunes a viernes
 de 09:00 a 18:00, que el backend necesita para colocar notas sin hora.
 
+También pide dos permisos: acceso completo al calendario (para evitar tus
+otros compromisos) y ubicación mientras se usa (para calcular traslados).
+Después, en **Ajustes › Lugares**, guarda «Casa» estando en casa (y «Oficina»
+en la oficina). Sin ningún lugar guardado, solo hay traslado para eventos en
+las próximas 3 horas, que salen de tu ubicación actual.
+
 ## Configurar Back Tap
 
 1. En **Atajos**, crea un atajo con la acción **Agendar nota** de Smart Scheduler.
@@ -84,8 +93,13 @@ de 09:00 a 18:00, que el backend necesita para colocar notas sin hora.
 
 ```bash
 cd iOS/SmartSchedulerKit
-swift test
+swift test          # con Xcode
+./run-tests.sh      # funciona en ambos casos
 ```
+
+Con solo las Command Line Tools (sin Xcode), usa `./run-tests.sh`: el sistema
+de compilación por defecto de SwiftPM pierde a veces el plugin de macros de
+Swift Testing, y el script usa el sistema nativo con las rutas explícitas.
 
 Las pruebas usan un transporte HTTP falso y no necesitan backend. Cubren el
 formato del API (snake_case y fechas con microsegundos de Pydantic), el

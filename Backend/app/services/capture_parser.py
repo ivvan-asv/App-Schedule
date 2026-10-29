@@ -49,6 +49,11 @@ hours without am/pm as ordinary waking hours. Use null when no clock time is \
 given; the app then finds a free slot.
 - duration_minutes: the duration the note states; otherwise a realistic \
 estimate for the activity.
+- location_query: when the entry happens at a physical place the note names \
+("dentista en Providencia", "el supermercado", "la oficina", "casa de mi \
+mamá"), that place as a short map search query in the language of the note, \
+keeping the address or neighbourhood when given. Use null when no place is \
+named, and for calls or online meetings.
 - window_start_local and window_end_local: when the note limits when the entry \
 should happen without giving a clock time ("esta semana", "el jueves", \
 "antes del viernes", "en la tarde"), the local bounds of that period as \
@@ -74,6 +79,9 @@ class ParsedCapture(BaseModel):
     )
     window_end_local: str | None = Field(
         description="Latest local end as YYYY-MM-DDTHH:MM, or null.",
+    )
+    location_query: str | None = Field(
+        description="Map search query for the place named in the note, or null.",
     )
 
 

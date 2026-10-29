@@ -13,12 +13,14 @@ from app.schemas.schedule import (
     AvailableSlot,
     EventCreate,
     EventRead,
+    WorkingHoursReplace,
 )
 from app.services.schedule import (
     create_event,
     create_working_hours_rule,
     find_available_slots,
     get_active_user,
+    replace_working_hours,
 )
 
 router = APIRouter(prefix="/users/{user_id}", tags=["Scheduling"])
@@ -80,6 +82,15 @@ async def list_availability_rules(
         .order_by(AgendaRule.start_time)
     )
     return list(result.scalars().all())
+
+
+@router.put("/working-hours", response_model=list[AgendaRuleRead])
+async def put_working_hours(
+    user_id: uuid.UUID,
+    schedule: WorkingHoursReplace,
+    session: AsyncSession = Depends(get_db),
+) -> list[AgendaRule]:
+    return await replace_working_hours(session, user_id, schedule)
 
 
 @router.get("/availability/slots", response_model=list[AvailableSlot])

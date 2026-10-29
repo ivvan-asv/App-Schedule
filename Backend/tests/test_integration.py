@@ -5,11 +5,13 @@ run creates a throwaway database, applies the Alembic migrations to it and
 drops it afterwards, so existing data is never touched.
 """
 import asyncio
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+import json
 import os
 from pathlib import Path
 import unittest
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 import uuid
 from zoneinfo import ZoneInfo
 
@@ -24,7 +26,8 @@ from sqlalchemy.pool import NullPool
 from app.core.config import settings
 from app.core.database import Base, get_db
 from app.main import app
-from app.models import Capture, Event, User
+from app.models import CalendarAccount, Capture, Event, Travel, User
+from app.models.calendar import CalendarAccountStatus
 from app.models.capture import CaptureStatus
 from app.services.capture_parser import (
     CaptureNotUnderstood,
@@ -175,6 +178,48 @@ class PostgresIntegrationTests(PostgresTestCase):
         )
         self.assertEqual(missing.status_code, 404, missing.text)
 
+    async def test_working_hours_are_replaced_as_a_whole(self) -> None:
+        user_response = await self.client.post("/api/v1/users/demo")
+        user_url = f"/api/v1/users/{user_response.json()['id']}"
+        await self.client.post(
+            f"{user_url}/availability-rules",
+            json={"weekdays": [1, 2, 3, 4, 5], "start_time": "09:00", "end_time": "18:00"},
+        )
+
+        response = await self.client.put(
+            f"{user_url}/working-hours",
+            json={
+                "rules": [
+                    {"weekdays": [1, 3], "start_time": "08:00", "end_time": "14:00"},
+                    {"weekdays": [6], "start_time": "10:00", "end_time": "13:00"},
+                ]
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        listed = await self.client.get(f"{user_url}/availability-rules")
+        self.assertEqual(
+            sorted((rule["weekdays"], rule["start_time"]) for rule in listed.json()),
+            [([1, 3], "08:00:00"), ([6], "10:00:00")],
+        )
+
+        monday = next_monday_after_a_week()
+        slots = await self.client.get(
+            f"{user_url}/availability/slots",
+            params={
+                "from": monday.replace(hour=0).isoformat(),
+                "to": monday.replace(hour=23).isoformat(),
+                "duration_minutes": 60,
+                "step_minutes": 60,
+            },
+        )
+        starts = [datetime.fromisoformat(slot["start"]).astimezone(SANTIAGO).hour for slot in slots.json()]
+        self.assertEqual(starts[0], 8)
+        self.assertEqual(starts[-1], 13)
+
+        empty = await self.client.put(f"{user_url}/working-hours", json={"rules": []})
+        self.assertEqual(empty.status_code, 422, empty.text)
+
     async def test_scheduling_flow(self) -> None:
         user_response = await self.client.post("/api/v1/users/demo")
         self.assertEqual(user_response.status_code, 200, user_response.text)
@@ -281,6 +326,7 @@ class CaptureIntegrationTests(PostgresTestCase):
             "duration_minutes": 60,
             "window_start_local": None,
             "window_end_local": None,
+            "location_query": None,
         }
         return ParsedCapture(**{**values, **overrides})
 
@@ -325,6 +371,8 @@ class CaptureIntegrationTests(PostgresTestCase):
         self.assertEqual(event.origin.value, "captura")
         self.assertEqual(str(event.capture_id), body["id"])
 
+        self.assertIsNone(body["location_query"])
+
         [capture] = await self.captures()
         self.assertEqual(capture.llm_model, "fake-parser")
         self.assertEqual(capture.llm_result["title"], "Dentista")
@@ -356,6 +404,24 @@ class CaptureIntegrationTests(PostgresTestCase):
         self.assertEqual(datetime.fromisoformat(event["start"]), self.monday.replace(hour=10))
         self.assertEqual(event["type"], "reunion")
         self.assertTrue(event["flexible"])
+
+    async def test_capture_returns_the_place_to_resolve(self) -> None:
+        start = self.monday.replace(hour=10)
+        self.use_parser(
+            self.parsed(
+                start_local=f"{start:%Y-%m-%dT%H:%M}",
+                location_query="dentista en Providencia",
+            )
+        )
+
+        response = await self.client.post(
+            f"{self.user_url}/captures",
+            json={"text": "el lunes a las diez dentista en Providencia"},
+        )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["location_query"], "dentista en Providencia")
+        self.assertIsNone(response.json()["event"]["location_id"])
 
     async def test_device_busy_intervals_are_avoided(self) -> None:
         device_busy = [
@@ -422,3 +488,413 @@ class CaptureIntegrationTests(PostgresTestCase):
         self.assertEqual(len(captures), 2)
         self.assertTrue(all(c.status == CaptureStatus.ERROR for c in captures))
         self.assertTrue(all(c.error_detail for c in captures))
+
+
+@unittest.skipUnless(
+    TEST_DATABASE_URL,
+    "set TEST_DATABASE_URL to run the PostgreSQL integration tests",
+)
+class LocationIntegrationTests(PostgresTestCase):
+    """Saved places and travel blocks; the travel time comes from the app."""
+
+    office = {"alias": "Oficina", "latitude": -33.4372, "longitude": -70.6506}
+    dentist = {
+        "alias": "Clínica Dental",
+        "address": "Av. Providencia 1234",
+        "latitude": -33.4263,
+        "longitude": -70.6170,
+        "place_id": "mapkit:dental-1",
+    }
+
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        self.monday = next_monday_after_a_week()
+        async with self.session_factory() as session:
+            user = User(email=f"{uuid.uuid4().hex}@example.com", display_name="Places")
+            session.add(user)
+            await session.commit()
+            self.user_id = user.id
+        self.user_url = f"/api/v1/users/{self.user_id}"
+        rule_response = await self.client.post(
+            f"{self.user_url}/availability-rules",
+            json={"weekdays": [1, 2, 3, 4, 5], "start_time": "09:00", "end_time": "18:00"},
+        )
+        self.assertEqual(rule_response.status_code, 201, rule_response.text)
+
+    async def create_event(self, hour: int, minute: int = 0, **extra) -> dict:
+        start = self.monday.replace(hour=hour, minute=minute)
+        response = await self.client.post(
+            f"{self.user_url}/events",
+            json={
+                "title": extra.pop("title", "Dentista"),
+                "start": start.isoformat(),
+                "end": (start + timedelta(hours=1)).isoformat(),
+                **extra,
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        return response.json()
+
+    async def make_flexible(self, event_id: str) -> None:
+        async with self.session_factory() as session:
+            event = await session.get(Event, uuid.UUID(event_id))
+            event.flexible = True
+            event.window_start = self.monday.replace(hour=0)
+            event.window_end = self.monday.replace(hour=23, minute=59)
+            await session.commit()
+
+    async def put_location(self, event_id: str, **body) -> httpx.Response:
+        return await self.client.put(f"{self.user_url}/events/{event_id}/location", json=body)
+
+    async def travel_children(self, event_id: str) -> list[Event]:
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(Event).where(Event.parent_id == uuid.UUID(event_id))
+            )
+            return list(result.scalars().all())
+
+    async def test_saved_places_are_upserted_by_alias(self) -> None:
+        first = await self.client.post(f"{self.user_url}/locations", json=self.office)
+        self.assertEqual(first.status_code, 201, first.text)
+        moved = await self.client.post(
+            f"{self.user_url}/locations",
+            json={**self.office, "alias": "oficina", "latitude": -33.40},
+        )
+        self.assertEqual(moved.json()["id"], first.json()["id"])
+        self.assertEqual(moved.json()["latitude"], -33.40)
+
+        listed = await self.client.get(f"{self.user_url}/locations")
+        self.assertEqual([place["id"] for place in listed.json()], [first.json()["id"]])
+
+        deleted = await self.client.delete(f"{self.user_url}/locations/{first.json()['id']}")
+        self.assertEqual(deleted.status_code, 204)
+        missing = await self.client.delete(f"{self.user_url}/locations/{first.json()['id']}")
+        self.assertEqual(missing.status_code, 404)
+
+    async def test_travel_block_is_inserted_before_the_event(self) -> None:
+        office = (await self.client.post(f"{self.user_url}/locations", json=self.office)).json()
+        event = await self.create_event(11)
+        body = {
+            "location": self.dentist,
+            "travel": {
+                "origin_location_id": office["id"],
+                "duration_seconds": 22 * 60,
+                "distance_meters": 5400,
+            },
+        }
+
+        response = await self.put_location(event["id"], **body)
+
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertFalse(result["moved"])
+        self.assertFalse(result["travel_overlaps"])
+        self.assertEqual(result["event"]["location_id"], result["location"]["id"])
+        travel = result["travel"]
+        self.assertEqual(travel["type"], "traslado")
+        self.assertEqual(travel["parent_id"], event["id"])
+        self.assertEqual(travel["title"], "Traslado a Clínica Dental")
+        # 22 minutes round up to 25.
+        self.assertEqual(
+            datetime.fromisoformat(travel["start"]),
+            self.monday.replace(hour=10, minute=35),
+        )
+        self.assertEqual(datetime.fromisoformat(travel["end"]), self.monday.replace(hour=11))
+
+        async with self.session_factory() as session:
+            detail = await session.get(Travel, uuid.UUID(travel["id"]))
+        self.assertEqual(detail.duration_seconds, 22 * 60)
+        self.assertEqual(str(detail.origin_id), office["id"])
+        self.assertEqual(detail.provider, "mapkit")
+
+        # A retry replaces the block and reuses the place.
+        retry = await self.put_location(event["id"], **body)
+        self.assertEqual(retry.json()["location"]["id"], result["location"]["id"])
+        self.assertEqual(len(await self.travel_children(event["id"])), 1)
+
+        # The travel block makes that time busy for later events.
+        overlapping = await self.client.post(
+            f"{self.user_url}/events",
+            json={
+                "title": "Llamada",
+                "start": self.monday.replace(hour=10, minute=40).isoformat(),
+                "end": self.monday.replace(hour=10, minute=50).isoformat(),
+            },
+        )
+        self.assertEqual(overlapping.status_code, 409, overlapping.text)
+
+    async def test_flexible_event_moves_so_the_trip_fits(self) -> None:
+        await self.create_event(9, 30, title="Reunión")
+        event = await self.create_event(10, 30)
+        await self.make_flexible(event["id"])
+
+        response = await self.put_location(
+            event["id"],
+            location=self.dentist,
+            travel={"duration_seconds": 30 * 60},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertTrue(result["moved"])
+        self.assertFalse(result["travel_overlaps"])
+        # The meeting ends at 10:30; the trip takes 10:30–11:00.
+        self.assertEqual(
+            datetime.fromisoformat(result["event"]["start"]),
+            self.monday.replace(hour=11),
+        )
+        self.assertEqual(
+            datetime.fromisoformat(result["travel"]["start"]),
+            self.monday.replace(hour=10, minute=30),
+        )
+
+    async def test_flexible_event_avoids_device_busy_times_when_moving(self) -> None:
+        event = await self.create_event(10)
+        await self.make_flexible(event["id"])
+
+        response = await self.put_location(
+            event["id"],
+            location=self.dentist,
+            travel={"duration_seconds": 15 * 60},
+            busy_intervals=[
+                {
+                    "start": self.monday.replace(hour=9).isoformat(),
+                    "end": self.monday.replace(hour=10).isoformat(),
+                }
+            ],
+        )
+
+        # The trip (9:45–10:00) hits the device busy time, so the event moves
+        # to the first slot after it with room for the trip.
+        result = response.json()
+        self.assertTrue(result["moved"], response.text)
+        self.assertEqual(
+            datetime.fromisoformat(result["travel"]["start"]),
+            self.monday.replace(hour=10),
+        )
+        self.assertEqual(
+            datetime.fromisoformat(result["event"]["start"]),
+            self.monday.replace(hour=10, minute=15),
+        )
+
+    async def test_fixed_event_keeps_its_time_and_reports_the_overlap(self) -> None:
+        await self.create_event(9, 30, title="Reunión")
+        event = await self.create_event(10, 30)
+
+        response = await self.put_location(
+            event["id"],
+            location=self.dentist,
+            travel={"duration_seconds": 30 * 60},
+        )
+
+        result = response.json()
+        self.assertFalse(result["moved"])
+        self.assertTrue(result["travel_overlaps"])
+        self.assertEqual(
+            datetime.fromisoformat(result["event"]["start"]),
+            self.monday.replace(hour=10, minute=30),
+        )
+        self.assertEqual(
+            datetime.fromisoformat(result["travel"]["start"]),
+            self.monday.replace(hour=10),
+        )
+
+    async def test_short_trip_and_place_only_create_no_travel_block(self) -> None:
+        event = await self.create_event(11)
+
+        for travel in (None, {"duration_seconds": 30}):
+            with self.subTest(travel=travel):
+                response = await self.put_location(
+                    event["id"], location=self.dentist, travel=travel
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertIsNone(response.json()["travel"])
+        self.assertEqual(await self.travel_children(event["id"]), [])
+
+    async def test_rejects_other_users_places_and_events(self) -> None:
+        event = await self.create_event(11)
+        foreign = await self.put_location(event["id"], location_id=str(uuid.uuid4()))
+        self.assertEqual(foreign.status_code, 404, foreign.text)
+
+        missing = await self.put_location(str(uuid.uuid4()), location=self.dentist)
+        self.assertEqual(missing.status_code, 404, missing.text)
+
+        both = await self.put_location(
+            event["id"], location=self.dentist, location_id=str(uuid.uuid4())
+        )
+        self.assertEqual(both.status_code, 422, both.text)
+
+
+@unittest.skipUnless(
+    TEST_DATABASE_URL,
+    "set TEST_DATABASE_URL to run the PostgreSQL integration tests",
+)
+class CalendarIntegrationTests(PostgresTestCase):
+    """Google connection with the provider's HTTP API simulated."""
+
+    async def asyncSetUp(self) -> None:
+        from app.api.v1.calendar import get_oauth_state_store
+        from app.services.calendar_accounts import get_calendar_http
+        from tests.test_calendar import CONFIGURED, InMemoryStateStore, id_token
+
+        await super().asyncSetUp()
+        self.monday = next_monday_after_a_week()
+        settings_patch = patch.multiple(settings, **CONFIGURED)
+        settings_patch.start()
+        self.addCleanup(settings_patch.stop)
+
+        self.state_store = InMemoryStateStore()
+        self.provider_calls: list[tuple[str, dict]] = []
+        self.refresh_response = {"access_token": "google-access-2", "expires_in": 3600}
+
+        def provider(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "oauth2.googleapis.com":
+                form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
+                self.provider_calls.append(("token", form))
+                if form["grant_type"] == "refresh_token":
+                    status_code = 400 if "error" in self.refresh_response else 200
+                    return httpx.Response(status_code, json=self.refresh_response)
+                return httpx.Response(200, json={
+                    "access_token": "google-access",
+                    "refresh_token": "google-refresh",
+                    "expires_in": 3600,
+                    "scope": "openid email",
+                    "id_token": id_token({"email": "ana@gmail.com"}),
+                })
+            self.provider_calls.append(("freebusy", json.loads(request.content)))
+            return httpx.Response(200, json={"calendars": {"primary": {"busy": [{
+                "start": self.monday.replace(hour=9).isoformat(),
+                "end": self.monday.replace(hour=10).isoformat(),
+            }]}}})
+
+        self.http = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+        self.addAsyncCleanup(self.http.aclose)
+        app.dependency_overrides[get_oauth_state_store] = lambda: self.state_store
+        app.dependency_overrides[get_calendar_http] = lambda: self.http
+
+        async with self.session_factory() as session:
+            user = User(email=f"{uuid.uuid4().hex}@example.com", display_name="Calendars")
+            session.add(user)
+            await session.commit()
+            self.user_id = user.id
+        self.user_url = f"/api/v1/users/{self.user_id}"
+        await self.client.post(
+            f"{self.user_url}/availability-rules",
+            json={"weekdays": [1, 2, 3, 4, 5], "start_time": "09:00", "end_time": "12:00"},
+        )
+
+    async def connect_google(self) -> httpx.Response:
+        start = await self.client.post(f"{self.user_url}/calendar-accounts/google/authorize")
+        self.assertEqual(start.status_code, 200, start.text)
+        state = parse_qs(urlparse(start.json()["authorization_url"]).query)["state"][0]
+        return await self.client.get(
+            "/api/v1/oauth/google/callback",
+            params={"state": state, "code": "auth-code"},
+            follow_redirects=False,
+        )
+
+    async def accounts(self) -> list[CalendarAccount]:
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(CalendarAccount).where(CalendarAccount.user_id == self.user_id)
+            )
+            return list(result.scalars().all())
+
+    async def expire_access_token(self, session: AsyncSession) -> None:
+        result = await session.execute(
+            select(CalendarAccount).where(CalendarAccount.user_id == self.user_id)
+        )
+        result.scalar_one().token_expires_at = datetime(2020, 1, 1, tzinfo=UTC)
+        await session.commit()
+
+    async def capture_on_monday(self) -> httpx.Response:
+        app.dependency_overrides[get_capture_parser] = lambda: FakeCaptureParser(ParsedCapture(
+            title="Dentista",
+            event_type="tarea",
+            priority="media",
+            start_local=None,
+            duration_minutes=60,
+            window_start_local=f"{self.monday:%Y-%m-%d}T00:00",
+            window_end_local=f"{self.monday:%Y-%m-%d}T23:59",
+            location_query=None,
+        ))
+        return await self.client.post(f"{self.user_url}/captures", json={"text": "dentista el lunes"})
+
+    async def test_connecting_stores_encrypted_tokens_once_per_account(self) -> None:
+        callback = await self.connect_google()
+
+        self.assertEqual(callback.status_code, 302, callback.text)
+        location = urlparse(callback.headers["location"])
+        self.assertEqual(parse_qs(location.query)["status"], ["ok"])
+        self.assertEqual(parse_qs(location.query)["email"], ["ana@gmail.com"])
+        self.assertEqual(self.provider_calls[0][1]["code"], "auth-code")
+        self.assertIn("code_verifier", self.provider_calls[0][1])
+
+        [account] = await self.accounts()
+        self.assertEqual(account.external_email, "ana@gmail.com")
+        self.assertNotIn(b"google-access", account.access_token_encrypted)
+        self.assertNotIn(b"google-refresh", account.refresh_token_encrypted)
+
+        listed = await self.client.get(f"{self.user_url}/calendar-accounts")
+        self.assertEqual(listed.json()[0]["external_email"], "ana@gmail.com")
+        self.assertEqual(listed.json()[0]["status"], "activa")
+
+        await self.connect_google()
+        self.assertEqual(len(await self.accounts()), 1)
+
+        # A state can be used only once.
+        replay = await self.client.get(
+            "/api/v1/oauth/google/callback",
+            params={"state": "used-or-invented", "code": "x"},
+            follow_redirects=False,
+        )
+        self.assertEqual(parse_qs(urlparse(replay.headers["location"]).query)["status"], ["error"])
+
+    async def test_captures_avoid_busy_times_of_connected_calendars(self) -> None:
+        await self.connect_google()
+
+        response = await self.capture_on_monday()
+
+        self.assertEqual(response.status_code, 201, response.text)
+        start = datetime.fromisoformat(response.json()["event"]["start"])
+        self.assertEqual(start, self.monday.replace(hour=10))
+        self.assertEqual(self.provider_calls[-1][0], "freebusy")
+
+    async def test_expired_access_token_is_refreshed(self) -> None:
+        await self.connect_google()
+        async with self.session_factory() as session:
+            await self.expire_access_token(session)
+
+        response = await self.capture_on_monday()
+
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertIn(("token", "refresh_token"), [(kind, body.get("grant_type")) for kind, body in self.provider_calls])
+        [account] = await self.accounts()
+        self.assertGreater(account.token_expires_at, datetime.now(UTC))
+
+    async def test_revoked_access_marks_account_and_does_not_block_captures(self) -> None:
+        await self.connect_google()
+        async with self.session_factory() as session:
+            await self.expire_access_token(session)
+        self.refresh_response = {"error": "invalid_grant"}
+
+        response = await self.capture_on_monday()
+
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(
+            datetime.fromisoformat(response.json()["event"]["start"]),
+            self.monday.replace(hour=9),
+        )
+        [account] = await self.accounts()
+        self.assertEqual(account.status, CalendarAccountStatus.TOKEN_EXPIRED)
+
+    async def test_disconnect_forgets_the_account(self) -> None:
+        await self.connect_google()
+        [account] = await self.accounts()
+
+        deleted = await self.client.delete(f"{self.user_url}/calendar-accounts/{account.id}")
+
+        self.assertEqual(deleted.status_code, 204)
+        self.assertEqual(await self.accounts(), [])
+        missing = await self.client.delete(f"{self.user_url}/calendar-accounts/{account.id}")
+        self.assertEqual(missing.status_code, 404)

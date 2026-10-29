@@ -7,6 +7,7 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.database import engine
 from app.core.redis import redis_pool
+from app.services.calendar_accounts import close_calendar_http
 from app.services.capture_parser import close_capture_parser
 
 
@@ -14,6 +15,7 @@ from app.services.capture_parser import close_capture_parser
 async def lifespan(_: FastAPI):
     yield
     await close_capture_parser()
+    await close_calendar_http()
     await redis_pool.disconnect()
     await engine.dispose()
 

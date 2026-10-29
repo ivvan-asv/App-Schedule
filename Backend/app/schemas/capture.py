@@ -2,33 +2,10 @@ from datetime import UTC, datetime
 from typing import Annotated
 import uuid
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    StringConstraints,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from app.models.capture import CaptureChannel, CaptureStatus
-from app.schemas.schedule import EventRead
-
-
-MAX_BUSY_INTERVALS = 500
-
-
-class BusyInterval(BaseModel):
-    start: datetime
-    end: datetime
-
-    @model_validator(mode="after")
-    def validate_range(self) -> "BusyInterval":
-        if self.start.utcoffset() is None or self.end.utcoffset() is None:
-            raise ValueError("busy interval start and end must include a timezone")
-        if self.end <= self.start:
-            raise ValueError("busy interval end must be later than start")
-        return self
+from app.schemas.schedule import MAX_BUSY_INTERVALS, BusyInterval, EventRead
 
 
 class CaptureCreate(BaseModel):
@@ -73,3 +50,10 @@ class CaptureRead(BaseModel):
     processed_at: datetime | None
     latency_ms: int | None
     event: EventRead | None
+    location_query: str | None = Field(
+        default=None,
+        description=(
+            "Place named in the note, for the app to resolve with its map "
+            "service and send to PUT .../events/{id}/location."
+        ),
+    )

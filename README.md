@@ -134,6 +134,9 @@ open SmartScheduler.xcodeproj
 ```
 Configuración de Back Tap y del servidor en [iOS/README.md](iOS/README.md).
 
+### 5. Google Calendar y Outlook (opcional)
+Credenciales OAuth paso a paso en [docs/calendar-credentials.md](docs/calendar-credentials.md).
+
 ---
 
 ## 🔄 Flujo de Trabajo (End-to-End)
@@ -170,6 +173,11 @@ sequenceDiagram
   - Inserción local de eventos vía EventKit.
 - [ ] **Fase 2: Motor de Rutas y Optimización CSP**
   - [x] Las capturas evitan las horas ocupadas del calendario del iPhone (EventKit, solo horas).
+  - [x] Bloques de traslado con Apple Maps (MapKit) en el dispositivo; los eventos flexibles se mueven si el viaje no cabe.
+  - [x] Lugares guardados (Casa, Oficina) como origen y destino.
+  - [x] Horario laboral editable desde la app.
+  - [x] Conexión OAuth con Google Calendar y Outlook; las capturas evitan sus horas ocupadas ([credenciales](docs/calendar-credentials.md)).
+  - [ ] Escribir los eventos agendados en Google Calendar / Outlook.
   - Integración con Google Maps Distance Matrix.
   - Algoritmo CSP con Google OR-Tools para gestión de bloques de tránsito.
   - Sincronización remota con Google Calendar y Outlook Graph.

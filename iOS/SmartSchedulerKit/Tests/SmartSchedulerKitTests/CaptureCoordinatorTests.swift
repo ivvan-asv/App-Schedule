@@ -28,11 +28,12 @@ import Testing
         let outcome = try await coordinator(transport, mirror: mirror)
             .submit(text: "  mañana a las tres dentista ", channel: .voice, sttEngine: "apple_speech")
 
-        guard case .scheduled(let event) = outcome else {
+        guard case .scheduled(let scheduled) = outcome else {
             Issue.record("expected a scheduled event, got \(outcome)")
             return
         }
-        #expect(event.id == eventID)
+        #expect(scheduled.event.id == eventID)
+        #expect(scheduled.travel == nil)
         #expect(mirror.mirrored.map(\.id) == [eventID])
         #expect(jsonBody(transport.requests[0])["text"] as? String == "mañana a las tres dentista")
     }

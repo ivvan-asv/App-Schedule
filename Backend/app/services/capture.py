@@ -4,6 +4,7 @@ import time
 import uuid
 
 from fastapi import HTTPException, status
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +12,7 @@ from app.models import Capture, Event
 from app.models.capture import CaptureStatus
 from app.models.schedule import EventOrigin, EventPriority, EventStatus, EventType
 from app.schemas.capture import CaptureCreate
+from app.services.calendar_accounts import EXTERNAL_BUSY_HORIZON, connected_calendar_busy
 from app.services.capture_parser import (
     CaptureNotUnderstood,
     CaptureParser,
@@ -23,6 +25,7 @@ from app.services.schedule import (
     find_available_slots,
     get_active_user,
     lock_active_user,
+    round_up,
     user_timezone,
 )
 
@@ -58,13 +61,6 @@ async def _find_processed_capture(
     return CaptureOutcome(capture=row.Capture, event=row.Event, created=False)
 
 
-def _round_up(moment: datetime, minutes: int) -> datetime:
-    step = timedelta(minutes=minutes)
-    epoch = datetime(1970, 1, 1, tzinfo=UTC)
-    remainder = (moment - epoch) % step
-    return moment if remainder == timedelta(0) else moment + (step - remainder)
-
-
 async def _choose_time(
     session: AsyncSession,
     user_id: uuid.UUID,
@@ -77,7 +73,7 @@ async def _choose_time(
         await ensure_no_overlap(session, user_id, resolved.start, end, extra_busy)
         return resolved.start, end
 
-    range_start = _round_up(max(resolved.window_start or earliest, earliest), SLOT_STEP_MINUTES)
+    range_start = round_up(max(resolved.window_start or earliest, earliest), SLOT_STEP_MINUTES)
     range_end = resolved.window_end or range_start + DEFAULT_SEARCH_HORIZON
     if range_end <= range_start:
         raise HTTPException(
@@ -126,6 +122,7 @@ async def process_capture(
     user_id: uuid.UUID,
     capture_data: CaptureCreate,
     parser: CaptureParser,
+    calendar_http: httpx.AsyncClient | None = None,
 ) -> CaptureOutcome:
     """Turn a dictated note into a confirmed event in the user's agenda.
 
@@ -162,16 +159,27 @@ async def process_capture(
         capture.llm_result = parsed.model_dump(mode="json")
         resolved = resolve_capture(parsed, timezone)
 
+        # Offline captures can arrive late; never schedule into the past.
+        earliest = max(capture_data.captured_at, datetime.now(UTC))
+        # Fetched before locking the agenda, so slow providers do not hold the lock.
+        external_busy = (
+            await connected_calendar_busy(
+                session, user_id, earliest, earliest + EXTERNAL_BUSY_HORIZON, calendar_http
+            )
+            if calendar_http is not None
+            else []
+        )
+
         await lock_active_user(session, user_id)
         if capture_data.local_id is not None:
             existing = await _find_processed_capture(session, user_id, capture_data.local_id)
             if existing is not None:
                 return existing
 
-        # Offline captures can arrive late; never schedule into the past.
-        earliest = max(capture_data.captured_at, datetime.now(UTC))
         device_busy = [(busy.start, busy.end) for busy in capture_data.busy_intervals]
-        start, end = await _choose_time(session, user_id, resolved, earliest, device_busy)
+        start, end = await _choose_time(
+            session, user_id, resolved, earliest, device_busy + external_busy
+        )
     except CaptureNotUnderstood as error:
         await _record_failure(session, capture, str(error), started)
         raise HTTPException(

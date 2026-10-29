@@ -4,7 +4,7 @@ import Foundation
 public protocol CalendarMirror: Sendable {
     /// Must be idempotent: the same event can arrive again when a queued
     /// capture is resent.
-    func mirror(_ event: ScheduledEvent) async
+    func mirror(_ event: ScheduledEvent, location: SavedLocation?) async
 }
 
 /// Busy times from calendars on the device, so the backend does not place a
@@ -13,9 +13,34 @@ public protocol BusyTimeProvider: Sendable {
     func busyIntervals(from start: Date, to end: Date) async -> [BusyInterval]
 }
 
+/// An event placed in the agenda, with the trip to it when it has a place.
+public struct ScheduledCapture: Sendable, Equatable {
+    public let event: ScheduledEvent
+    public let location: SavedLocation?
+    public let travel: ScheduledEvent?
+    /// The event was moved from the time first chosen so the trip fits.
+    public let moved: Bool
+    /// The trip overlaps another commitment; the user may arrive late.
+    public let travelOverlaps: Bool
+
+    public init(
+        event: ScheduledEvent,
+        location: SavedLocation? = nil,
+        travel: ScheduledEvent? = nil,
+        moved: Bool = false,
+        travelOverlaps: Bool = false
+    ) {
+        self.event = event
+        self.location = location
+        self.travel = travel
+        self.moved = moved
+        self.travelOverlaps = travelOverlaps
+    }
+}
+
 public enum CaptureOutcome: Sendable, Equatable {
     /// The backend placed the note in the agenda.
-    case scheduled(ScheduledEvent)
+    case scheduled(ScheduledCapture)
     /// The backend or the network is unavailable; the note is queued and sent later.
     case queued
     /// The backend refused the note (time taken, nothing to schedule). Resending will not help.
@@ -40,6 +65,7 @@ public actor CaptureCoordinator {
     private let store: any PendingCaptureStore
     private let mirror: (any CalendarMirror)?
     private let busyTimes: (any BusyTimeProvider)?
+    private let travelPlanner: TravelPlanner?
     private let now: @Sendable () -> Date
     private var isFlushing = false
 
@@ -49,6 +75,7 @@ public actor CaptureCoordinator {
         store: any PendingCaptureStore,
         mirror: (any CalendarMirror)? = nil,
         busyTimes: (any BusyTimeProvider)? = nil,
+        travelPlanner: TravelPlanner? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.api = api
@@ -56,6 +83,7 @@ public actor CaptureCoordinator {
         self.store = store
         self.mirror = mirror
         self.busyTimes = busyTimes
+        self.travelPlanner = travelPlanner
         self.now = now
     }
 
@@ -128,8 +156,46 @@ public actor CaptureCoordinator {
         guard let event = submission.result.event else {
             return .rejected("El servidor no devolvió ningún evento.")
         }
-        await mirror?.mirror(event)
-        return .scheduled(event)
+
+        var scheduled = ScheduledCapture(event: event)
+        // A replayed capture that already has its place keeps it as it is.
+        if let query = submission.result.locationQuery, event.locationId == nil {
+            scheduled = await addTravel(to: event, query: query, userID: userID, busy: busy) ?? scheduled
+        }
+
+        // Mirrored only now, because adding the trip can move a flexible event.
+        await mirror?.mirror(scheduled.event, location: scheduled.location)
+        if let travel = scheduled.travel {
+            await mirror?.mirror(travel, location: nil)
+        }
+        return .scheduled(scheduled)
+    }
+
+    /// The trip is a refinement: if the place is not found or the request
+    /// fails, the event stays where the backend placed it.
+    private func addTravel(
+        to event: ScheduledEvent,
+        query: String,
+        userID: UUID,
+        busy: [BusyInterval]
+    ) async -> ScheduledCapture? {
+        guard let travelPlanner else { return nil }
+        do {
+            guard var update = try await travelPlanner.plan(for: event, query: query, userID: userID) else {
+                return nil
+            }
+            update.busyIntervals = busy
+            let result = try await api.setEventLocation(userID: userID, eventID: event.id, update)
+            return ScheduledCapture(
+                event: result.event,
+                location: result.location,
+                travel: result.travel,
+                moved: result.moved,
+                travelOverlaps: result.travelOverlaps
+            )
+        } catch {
+            return nil
+        }
     }
 
     private func deviceBusyIntervals() async -> [BusyInterval] {

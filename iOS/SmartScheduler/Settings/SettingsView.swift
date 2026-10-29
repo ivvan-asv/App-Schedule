@@ -9,6 +9,8 @@ struct SettingsView: View {
     @State private var serverAddress = ""
     @State private var calendarAccess = EventKitCalendar.access
     @State private var isFlushing = false
+    @State private var newPlaceAlias = "Casa"
+    @State private var isSavingPlace = false
 
     var body: some View {
         NavigationStack {
@@ -31,6 +33,12 @@ struct SettingsView: View {
                     Text("Dirección del backend FastAPI. En un iPhone usa el nombre del Mac en la red local (scutil --get LocalHostName) terminado en .local.")
                 }
 
+                Section("Agenda") {
+                    NavigationLink("Horario laboral") { WorkingHoursView() }
+                }
+
+                ConnectedCalendarsSection()
+
                 Section {
                     LabeledContent("Acceso", value: calendarAccessDescription)
                     if calendarAccess != .full {
@@ -49,6 +57,44 @@ struct SettingsView: View {
                 } footer: {
                     Text("Con acceso completo, Smart Scheduler evita tus otros compromisos al elegir hora. Solo se envían al servidor las horas de inicio y fin, nunca los títulos ni los asistentes.")
                 }
+
+                Section {
+                    ForEach(model.savedPlaces) { place in
+                        VStack(alignment: .leading) {
+                            Text(place.displayName)
+                            if let address = place.address {
+                                Text(address).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .onDelete { offsets in
+                        let places = offsets.map { model.savedPlaces[$0] }
+                        Task {
+                            for place in places {
+                                await model.deletePlace(place)
+                            }
+                        }
+                    }
+                    HStack {
+                        TextField("Casa, Oficina…", text: $newPlaceAlias)
+                        Button(isSavingPlace ? "Guardando…" : "Guardar aquí") {
+                            Task {
+                                isSavingPlace = true
+                                await model.saveCurrentPlace(as: newPlaceAlias)
+                                isSavingPlace = false
+                            }
+                        }
+                        .disabled(isSavingPlace || newPlaceAlias.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    if let error = model.placesError {
+                        Text(error).font(.footnote).foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Lugares")
+                } footer: {
+                    Text("Guarda tu ubicación actual con un nombre. «Casa» es el punto de partida por defecto, y si dictas «en la oficina» se usa el lugar guardado como Oficina. Los traslados se calculan con Apple Maps.")
+                }
+                .task { await model.loadPlaces() }
 
                 Section {
                     LabeledContent("Capturas en cola", value: "\(model.pendingCaptures.count)")

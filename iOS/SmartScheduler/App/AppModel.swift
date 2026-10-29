@@ -12,7 +12,7 @@ enum AppTab: Hashable {
 
 /// What the user last saw happen to a capture.
 enum CaptureBanner: Equatable {
-    case scheduled(ScheduledEvent)
+    case scheduled(ScheduledCapture)
     case queued
     case rejected(String)
     case failed(String)
@@ -32,6 +32,13 @@ final class AppModel {
     private(set) var upcoming: [ScheduledEvent] = []
     private(set) var agendaError: String?
     private(set) var isLoadingAgenda = false
+    private(set) var workingHours: WeeklySchedule?
+    private(set) var workingHoursError: String?
+    private(set) var calendarAccounts: [CalendarAccount] = []
+    private(set) var calendarProviders: [CalendarProviderStatus] = []
+    private(set) var calendarMessage: String?
+    private(set) var savedPlaces: [SavedLocation] = []
+    private(set) var placesError: String?
     /// Set by `DictateCaptureIntent`; consumed once the scene is active.
     private(set) var dictationRequested = false
 
@@ -48,6 +55,7 @@ final class AppModel {
         if EventKitCalendar.access == .notDetermined {
             _ = await services.calendar.requestFullAccess()
         }
+        DeviceLocation.requestAuthorization()
         if connectivityTask == nil {
             connectivityTask = Task { [weak self] in
                 for await _ in ConnectivityMonitor.connectionRestored() {
@@ -109,9 +117,9 @@ final class AppModel {
         let result: CaptureBanner
         do {
             switch try await services.coordinator.submit(text: text, channel: channel, sttEngine: sttEngine) {
-            case .scheduled(let event):
-                result = .scheduled(event)
-                insertUpcoming(event)
+            case .scheduled(let scheduled):
+                result = .scheduled(scheduled)
+                insertUpcoming(scheduled)
             case .queued:
                 result = .queued
                 scheduleBackgroundFlush()
@@ -136,8 +144,8 @@ final class AppModel {
     func flushPending() async {
         do {
             let flushed = try await services.coordinator.flushPending()
-            for case .scheduled(let event) in flushed.map(\.outcome) {
-                insertUpcoming(event)
+            for case .scheduled(let scheduled) in flushed.map(\.outcome) {
+                insertUpcoming(scheduled)
             }
         } catch {
             logger.error("Flushing queued captures failed: \(error.localizedDescription)")
@@ -182,10 +190,130 @@ final class AppModel {
         }
     }
 
-    private func insertUpcoming(_ event: ScheduledEvent) {
-        upcoming.removeAll { $0.id == event.id }
-        upcoming.append(event)
+    private func insertUpcoming(_ scheduled: ScheduledCapture) {
+        let events = [scheduled.event] + (scheduled.travel.map { [$0] } ?? [])
+        let ids = Set(events.map(\.id))
+        // A retried trip replaces the previous travel block of the same event.
+        upcoming.removeAll { ids.contains($0.id) || ($0.type == .travel && $0.parentId == scheduled.event.id) }
+        upcoming.append(contentsOf: events)
         upcoming.sort { $0.start < $1.start }
+    }
+
+    // MARK: Working hours
+
+    func loadWorkingHours() async {
+        do {
+            let userID = try await services.account.userID()
+            workingHours = WeeklySchedule(rules: try await services.api.workingHoursRules(userID: userID))
+            workingHoursError = nil
+        } catch {
+            workingHoursError = error.localizedDescription
+        }
+    }
+
+    func saveWorkingHours(_ schedule: WeeklySchedule) async -> Bool {
+        do {
+            let userID = try await services.account.userID()
+            let rules = try await services.api.replaceWorkingHours(userID: userID, schedule.rules)
+            workingHours = WeeklySchedule(rules: rules)
+            workingHoursError = nil
+            return true
+        } catch {
+            workingHoursError = error.localizedDescription
+            return false
+        }
+    }
+
+    // MARK: Connected calendars
+
+    func loadCalendars() async {
+        do {
+            let userID = try await services.account.userID()
+            async let providers = services.api.calendarProviders()
+            async let accounts = services.api.calendarAccounts(userID: userID)
+            (calendarProviders, calendarAccounts) = try await (providers, accounts)
+            if calendarAccounts.contains(where: { $0.status != .active }) {
+                calendarMessage = "Una cuenta perdió el acceso. Toca «Reconectar»."
+            }
+        } catch {
+            calendarMessage = error.localizedDescription
+        }
+    }
+
+    func calendarAuthorizationURL(for provider: ExternalCalendarProvider) async -> URL? {
+        do {
+            let userID = try await services.account.userID()
+            calendarMessage = nil
+            return try await services.api.calendarAuthorizationURL(userID: userID, provider: provider)
+        } catch {
+            // 503 names the .env variables still missing on the backend.
+            calendarMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func finishCalendarConnection(_ result: CalendarConnectionResult) async {
+        switch result {
+        case .connected(let provider, let email):
+            calendarMessage = "Conectado: \(email ?? provider?.displayName ?? "cuenta")."
+        case .failed(let message):
+            calendarMessage = message
+        }
+        await loadCalendars()
+    }
+
+    func disconnectCalendar(_ account: CalendarAccount) async {
+        do {
+            let userID = try await services.account.userID()
+            try await services.api.disconnectCalendar(userID: userID, accountID: account.id)
+            calendarAccounts.removeAll { $0.id == account.id }
+        } catch {
+            calendarMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: Places
+
+    func loadPlaces() async {
+        do {
+            let userID = try await services.account.userID()
+            savedPlaces = try await services.api.locations(userID: userID)
+                .filter { $0.isFrequent }
+            placesError = nil
+        } catch {
+            placesError = error.localizedDescription
+        }
+    }
+
+    /// Saves where the user is now as "Casa", "Oficina"…, used as trip origin
+    /// and matched when a note names it.
+    func saveCurrentPlace(as alias: String) async {
+        let alias = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !alias.isEmpty else { return }
+        guard let here = await DeviceLocation().currentCoordinate() else {
+            placesError = "No se pudo obtener tu ubicación. Revisa el permiso de ubicación en Ajustes."
+            return
+        }
+        do {
+            let userID = try await services.account.userID()
+            _ = try await services.api.saveLocation(
+                userID: userID,
+                LocationInput(alias: alias, coordinate: here, isFrequent: true)
+            )
+            await loadPlaces()
+        } catch {
+            placesError = error.localizedDescription
+        }
+    }
+
+    func deletePlace(_ place: SavedLocation) async {
+        do {
+            let userID = try await services.account.userID()
+            try await services.api.deleteLocation(userID: userID, locationID: place.id)
+            savedPlaces.removeAll { $0.id == place.id }
+        } catch {
+            placesError = error.localizedDescription
+        }
     }
 
     // MARK: Settings

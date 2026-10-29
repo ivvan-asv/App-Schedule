@@ -158,7 +158,7 @@ struct BannerView: View {
 
     private var title: String {
         switch banner {
-        case .scheduled(let event): event.title
+        case .scheduled(let scheduled): scheduled.event.title
         case .queued: "Guardado sin conexión"
         case .rejected: "No se pudo agendar"
         case .failed: "Error"
@@ -167,10 +167,32 @@ struct BannerView: View {
 
     private var detail: String {
         switch banner {
-        case .scheduled(let event): event.summary
+        case .scheduled(let scheduled): scheduled.summary
         case .queued: "Se agendará cuando vuelva la conexión."
         case .rejected(let reason), .failed(let reason): reason
         }
+    }
+}
+
+extension ScheduledCapture {
+    /// "mar 3 nov, 15:00–16:00 · Clínica Dental · 25 min de traslado".
+    var summary: String {
+        var parts = [event.summary]
+        if let location {
+            parts.append(location.displayName)
+        }
+        if let travel {
+            let minutes = Int(travel.end.timeIntervalSince(travel.start) / 60)
+            parts.append("\(minutes) min de traslado")
+        }
+        var text = parts.joined(separator: " · ")
+        if moved {
+            text += "\nSe movió para que llegues a tiempo."
+        }
+        if travelOverlaps {
+            text += "\nOjo: el traslado se cruza con otro compromiso."
+        }
+        return text
     }
 }
 

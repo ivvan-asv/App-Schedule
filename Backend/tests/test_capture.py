@@ -34,6 +34,7 @@ def parsed_capture(**overrides) -> ParsedCapture:
         "duration_minutes": 30,
         "window_start_local": None,
         "window_end_local": None,
+        "location_query": None,
     }
     return ParsedCapture(**{**values, **overrides})
 

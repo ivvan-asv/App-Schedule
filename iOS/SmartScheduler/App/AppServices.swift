@@ -52,12 +52,19 @@ final class AppServices {
     ) -> (SchedulerAPI, SchedulerAccount, CaptureCoordinator) {
         let api = SchedulerAPI(baseURL: url)
         let account = SchedulerAccount(api: api, store: defaults)
+        let planner = TravelPlanner(
+            api: api,
+            places: MapKitPlaceSearch(),
+            routes: MapKitRouteEstimator(),
+            currentLocation: DeviceLocation()
+        )
         let coordinator = CaptureCoordinator(
             api: api,
             account: account,
             store: store,
             mirror: calendar,
-            busyTimes: calendar
+            busyTimes: calendar,
+            travelPlanner: planner
         )
         return (api, account, coordinator)
     }
